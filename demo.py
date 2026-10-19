@@ -81,6 +81,8 @@ def run_demo():
     print(f"  ✅ Traitement 9:16 terminé en {elapsed_9_16:.1f}s !")
     for clip in results_9_16["ride_clips"]:
         print(f"     📱 Clip 9:16 sauvegardé : {clip}")
+    for split_clip in results_9_16.get("split_clips", []):
+        print(f"     📺 Split-Screen 1080p sauvegardé : {split_clip}")
 
     print("\n" + "=" * 75)
     print("🎉 DÉMO RÉUSSIE AVEC SUCCÈS !")

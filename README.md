@@ -98,8 +98,8 @@ Interface moderne pour déposer vos vidéos, ajuster interactivement le zoom, la
 # Export cinématique 16:9 (YouTube)
 python3 track_surf.py --input ma_session.mp4 --aspect 16:9 --output-dir outputs/
 
-# Export vertical 9:16 (Instagram Reels / TikTok)
-python3 track_surf.py --input ma_session.mp4 --aspect 9:16 --lead-room 0.30 --zoom-scale 4.0
+# Export vertical 9:16 (Instagram Reels / TikTok) + Vidéo Double Écran (Side-by-Side 1080p)
+python3 track_surf.py --input ma_session.mp4 --aspect 9:16 --lead-room 0.35 --zoom-scale 4.0
 ```
 
 ---
