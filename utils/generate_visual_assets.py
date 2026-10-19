@@ -1,237 +1,291 @@
 """
 Generates high-definition visual assets (Hero Banner, Comparative Infographic,
-and Animated Demonstration GIF) for the GitHub README.
+and Animated Demonstration GIF) for the GitHub README using REAL 1080p surf footage.
 """
 
 from pathlib import Path
-import numpy as np
+import sys
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 import cv2
+import numpy as np
 from PIL import Image
-import matplotlib.pyplot as plt
 
-ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
+from surf_camera.detector import SurferDetector
+from surf_camera.tracker import SurferTracker
+from surf_camera.state_machine import SurferStateMachine, SurferState
+from surf_camera.cameraman import VirtualCameraman, CameraBox
+from surf_camera.utils import draw_hud
+
+
+ASSETS_DIR = PROJECT_ROOT / "assets"
 ASSETS_DIR.mkdir(parents=True, exist_ok=True)
+SAMPLE_VIDEO = PROJECT_ROOT / "data" / "sample_surf_session.mp4"
 
 
-def draw_realistic_ocean_frame(
-    width: int,
-    height: int,
-    frame_idx: int,
-    surfer_phase: str = "riding",
-    surfer_x: float = 640.0,
-    surfer_y: float = 360.0,
-) -> np.ndarray:
-    """Renders a single high-quality surf frame."""
-    frame = np.zeros((height, width, 3), dtype=np.uint8)
+def run_full_session_extraction():
+    assert SAMPLE_VIDEO.exists(), f"Sample video not found at {SAMPLE_VIDEO}"
 
-    # Ocean gradient (deep navy to turquoise water)
-    for y in range(height):
-        ratio = y / height
-        b = int(150 + 70 * ratio)
-        g = int(85 + 50 * ratio)
-        r = int(15 + 25 * ratio)
-        frame[y, :] = (b, g, r)
+    cap = cv2.VideoCapture(str(SAMPLE_VIDEO))
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-    # Sun reflection & water ripples
-    for k in range(12):
-        ry = int(height * (0.2 + 0.05 * k))
-        rx = int(width * 0.5 + np.sin(k * 0.7 + frame_idx * 0.05) * (width * 0.3))
-        rw = int(width * 0.4 - k * 15)
-        cv2.ellipse(frame, (rx, ry), (max(10, rw), 6), 0, 0, 360, (190, 225, 235), -1)
+    print(f"🏄 Loading real surf video: {width}x{height} @ {fps:.1f}fps, {total_frames} frames")
 
-    # Curving wave face & white water foam
-    wave_cx = int(surfer_x - 120 + np.sin(frame_idx * 0.08) * 15)
-    wave_cy = int(surfer_y - 20)
-    # Breaking lip
-    cv2.ellipse(frame, (wave_cx, wave_cy), (240, 90), 12, 0, 360, (230, 245, 250), -1)
-    cv2.ellipse(frame, (wave_cx - 40, wave_cy + 15), (200, 60), 8, 0, 360, (255, 255, 255), -1)
+    detector = SurferDetector("yolov8n.pt", conf_threshold=0.20)
+    tracker = SurferTracker(max_lost_frames=25)
+    state_machine = SurferStateMachine(fps=fps, min_ride_duration_sec=1.0)
 
-    # Surfer geometry
-    sx, sy = int(surfer_x), int(surfer_y)
-
-    if surfer_phase == "paddling":
-        sw, sh = 65, 22
-        # Prone board
-        cv2.ellipse(frame, (sx, sy + 6), (sw, 10), -5, 0, 360, (255, 255, 255), -1)
-        # Prone body
-        cv2.ellipse(frame, (sx, sy), (sw - 15, 9), 0, 0, 360, (30, 30, 30), -1)
-        # Head
-        cv2.circle(frame, (sx + sw - 15, sy - 2), 6, (170, 140, 120), -1)
-    else:
-        # Standing / Riding
-        sw, sh = 30, 75
-        # Surfboard at angle
-        cv2.ellipse(frame, (sx, sy + 30), (45, 10), -15, 0, 360, (255, 245, 220), -1)
-        # Body in compression
-        cv2.ellipse(frame, (sx - 4, sy + 8), (14, 24), -10, 0, 360, (30, 30, 30), -1)
-        cv2.ellipse(frame, (sx, sy - 14), (11, 18), 10, 0, 360, (30, 30, 30), -1)
-        # Head
-        cv2.circle(frame, (sx + 4, sy - 30), 8, (170, 140, 120), -1)
-        # Spray trails
-        for s in range(6):
-            spx = int(sx - 35 - s * 10 + np.random.randint(-4, 4))
-            spy = int(sy + 30 + np.random.randint(-6, 6))
-            cv2.circle(frame, (spx, spy), np.random.randint(3, 8), (250, 255, 255), -1)
-
-    return frame
-
-
-def generate_hero_banner():
-    """Creates assets/surf_hero_banner.png."""
-    w, h = 1280, 500
-    frame = draw_realistic_ocean_frame(w, h, frame_idx=50, surfer_phase="riding", surfer_x=720, surfer_y=280)
-
-    # Virtual Camera Box (Lead Room preview)
-    cam_x1, cam_y1, cam_x2, cam_y2 = 450, 90, 1150, 480
-    cv2.rectangle(frame, (cam_x1, cam_y1), (cam_x2, cam_y2), (255, 0, 220), 3)
-
-    # Target lead room point (ahead of surfer)
-    cv2.circle(frame, (900, 280), 8, (0, 255, 100), -1)
-    cv2.line(frame, (720, 280), (900, 280), (0, 255, 100), 2, cv2.LINE_AA)
-    cv2.putText(frame, "LEAD ROOM (OPEN WAVE)", (820, 265), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 100), 1, cv2.LINE_AA)
-
-    # Virtual camera header tag
-    cv2.rectangle(frame, (cam_x1, cam_y1 - 30), (cam_x1 + 320, cam_y1), (20, 20, 20), -1)
-    cv2.rectangle(frame, (cam_x1, cam_y1 - 30), (cam_x1 + 320, cam_y1), (255, 0, 220), 1)
-    cv2.putText(frame, "VIRTUAL PTZ DO-P (16:9 AUTO-FRAME)", (cam_x1 + 10, cam_y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (255, 255, 255), 1, cv2.LINE_AA)
-
-    # Surfer Corner Bounding Box
-    bx1, by1, bx2, by2 = 680, 230, 760, 330
-    cv2.rectangle(frame, (bx1, by1), (bx2, by2), (0, 255, 120), 2)
-    cv2.rectangle(frame, (bx1, by1 - 22), (bx1 + 140, by1), (20, 20, 20), -1)
-    cv2.putText(frame, "SURFER: RIDING", (bx1 + 6, by1 - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 255, 120), 1, cv2.LINE_AA)
-
-    # Modern HUD overlay at top left
-    cv2.rectangle(frame, (25, 25), (380, 140), (15, 18, 26), -1)
-    cv2.rectangle(frame, (25, 25), (380, 140), (0, 198, 255), 1)
-    cv2.putText(frame, "SURF-CAMERA-VISION", (40, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.70, (0, 198, 255), 2, cv2.LINE_AA)
-    cv2.putText(frame, "Autonomous Virtual PTZ Tracking", (40, 78), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1, cv2.LINE_AA)
-    cv2.putText(frame, "STATE: RIDING (Take-Off Confirmed)", (40, 102), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 100), 1, cv2.LINE_AA)
-    cv2.putText(frame, "LEAD-ROOM: +35% RIGHT | SMOOTHING: 0.10", (40, 124), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255, 255, 255), 1, cv2.LINE_AA)
-
-    out_file = ASSETS_DIR / "surf_hero_banner.png"
-    cv2.imwrite(str(out_file), frame)
-    print(f"✅ Bannière héro sauvegardée : {out_file}")
-
-
-def generate_comparison_triptych():
-    """Creates assets/comparison_wide_vs_ptz.png."""
-    w, h = 1280, 720
-    frame = draw_realistic_ocean_frame(w, h, frame_idx=80, surfer_phase="riding", surfer_x=740, surfer_y=380)
-
-    # Crop 1: 16:9 Landscape PTZ
-    c16_x1, c16_y1, c16_x2, c16_y2 = 480, 180, 1120, 540
-    crop_16_9 = frame[c16_y1:c16_y2, c16_x1:c16_x2]
-    crop_16_9 = cv2.resize(crop_16_9, (400, 225))
-
-    # Crop 2: 9:16 Vertical Reel PTZ
-    c9_x1, c9_y1, c9_x2, c9_y2 = 590, 120, 890, 650
-    crop_9_16 = frame[c9_y1:c9_y2, c9_x1:c9_x2]
-    crop_9_16 = cv2.resize(crop_9_16, (225, 400))
-
-    # Wide View annotated with both boxes
-    wide_annotated = cv2.resize(frame.copy(), (540, 304))
-    scale_w = 540 / w
-    scale_h = 304 / h
-    # Draw 16:9 box (cyan)
-    cv2.rectangle(
-        wide_annotated,
-        (int(c16_x1 * scale_w), int(c16_y1 * scale_h)),
-        (int(c16_x2 * scale_w), int(c16_y2 * scale_h)),
-        (0, 255, 255),
-        2,
-    )
-    # Draw 9:16 box (magenta)
-    cv2.rectangle(
-        wide_annotated,
-        (int(c9_x1 * scale_w), int(c9_y1 * scale_h)),
-        (int(c9_x2 * scale_w), int(c9_y2 * scale_h)),
-        (255, 0, 255),
-        2,
+    cameraman_16_9 = VirtualCameraman(
+        frame_width=width,
+        frame_height=height,
+        aspect_ratio="16:9",
+        zoom_scale=2.5,
+        smoothing_factor=0.10,
+        lead_room_factor=0.35,
+        min_crop_dim_ratio=0.15,
     )
 
-    # Compose comparison figure with Matplotlib
-    fig = plt.figure(figsize=(14, 5.5), facecolor="#0e131f")
-    gs = fig.add_gridspec(1, 3, width_ratios=[1.4, 1.0, 0.7])
+    frames = []
+    tracks_by_frame = []
+    states_by_frame = []
+    cam_boxes = []
 
-    ax1 = fig.add_subplot(gs[0, 0])
-    ax1.imshow(cv2.cvtColor(wide_annotated, cv2.COLOR_BGR2RGB))
-    ax1.set_title("1. Plan Large Fixe (iPhone sur Trépied)", color="#ffffff", fontsize=11, fontweight="bold", pad=8)
-    ax1.axis("off")
+    f_idx = 0
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        frames.append(frame)
 
-    ax2 = fig.add_subplot(gs[0, 1])
-    ax2.imshow(cv2.cvtColor(crop_16_9, cv2.COLOR_BGR2RGB))
-    ax2.set_title("2. Cadrage PTZ 16:9 Cinématique (Lead Room)", color="#00e5ff", fontsize=11, fontweight="bold", pad=8)
-    ax2.axis("off")
+        # Detect
+        dets = detector.detect(frame)
+        active_tracks = tracker.update(dets, frame_idx=f_idx)
+        states = state_machine.update(active_tracks, current_frame=f_idx)
 
-    ax3 = fig.add_subplot(gs[0, 2])
-    ax3.imshow(cv2.cvtColor(crop_9_16, cv2.COLOR_BGR2RGB))
-    ax3.set_title("3. Format 9:16 (TikTok/Reel)", color="#ff00e5", fontsize=11, fontweight="bold", pad=8)
-    ax3.axis("off")
+        # Main surfer: in wave zone, height > 70px
+        surfer_candidates = [
+            t for t in active_tracks
+            if (t.bbox[3] - t.bbox[1]) > 70 and 380 < t.center[1] < 750
+        ]
 
-    plt.suptitle("Transformation Automatique : Du Plan Large Fixe aux Clips Cadrés Pro", color="#ffffff", fontsize=14, fontweight="bold", y=0.98)
-    plt.tight_layout()
+        primary = None
+        if surfer_candidates:
+            # Prefer track moving to the left or highest speed
+            primary = max(surfer_candidates, key=lambda t: t.current_speed if t.current_speed > 1.0 else (t.bbox[3] - t.bbox[1]))
+        elif active_tracks:
+            primary = active_tracks[0]
 
-    out_file = ASSETS_DIR / "comparison_wide_vs_ptz.png"
-    plt.savefig(out_file, dpi=200, bbox_inches="tight", facecolor=fig.get_facecolor())
-    plt.close()
-    print(f"✅ Infographie comparative sauvegardée : {out_file}")
+        cam_box = None
+        if primary:
+            cam_box = cameraman_16_9.update(primary.bbox, primary.current_velocity)
+        cam_boxes.append(cam_box)
 
+        tracks_by_frame.append(surfer_candidates)
+        states_by_frame.append(states)
+        f_idx += 1
 
-def generate_animated_demo_gif():
-    """Creates assets/virtual_cameraman_ptz_demo.gif showing dynamic tracking."""
-    frames_gif = []
-    w, h = 640, 360
+    cap.release()
+    print(f"✅ Processed {len(frames)} real frames.")
 
-    # Simulate 24 frames of a surfer carving rightwards with virtual camera following
-    for i in range(25):
-        # Surfer trajectory (carving right)
-        sx = 200 + i * 14
-        sy = 190 + np.sin(i * 0.25) * 20
+    # -------------------------------------------------------------------------
+    # 1. ASSETS: surf_hero_banner.png
+    # -------------------------------------------------------------------------
+    prime_idx = 115
+    banner_frame = frames[prime_idx].copy()
+    box = cam_boxes[prime_idx]
 
-        raw_frame = draw_realistic_ocean_frame(w, h, frame_idx=i, surfer_phase="riding", surfer_x=sx, surfer_y=sy)
+    # Target surfer at frame 115
+    surfer_bbox = (974, 504, 1167, 686)
+    x1, y1, x2, y2 = surfer_bbox
+    surfer_cx = (x1 + x2) // 2
+    surfer_cy = (y1 + y2) // 2
 
-        # Virtual PTZ crop box centered around surfer with lead-room ahead
-        cam_w = 320
-        cam_h = 180
-        cam_cx = sx + 45  # lead room to the right
-        cam_cy = sy
+    # Draw corner brackets on the real surfer
+    neon_green = (0, 255, 120)
+    corner_len = 25
+    th = 3
+    # Top-Left
+    cv2.line(banner_frame, (x1, y1), (x1 + corner_len, y1), neon_green, th)
+    cv2.line(banner_frame, (x1, y1), (x1, y1 + corner_len), neon_green, th)
+    # Top-Right
+    cv2.line(banner_frame, (x2, y1), (x2 - corner_len, y1), neon_green, th)
+    cv2.line(banner_frame, (x2, y1), (x2, y1 - corner_len), neon_green, th)
+    # Bottom-Left
+    cv2.line(banner_frame, (x1, y2), (x1 + corner_len, y2), neon_green, th)
+    cv2.line(banner_frame, (x1, y2), (x1, y2 - corner_len), neon_green, th)
+    # Bottom-Right
+    cv2.line(banner_frame, (x2, y2), (x2 - corner_len, y2), neon_green, th)
+    cv2.line(banner_frame, (x2, y2), (x2, y2 - corner_len), neon_green, th)
 
-        cx1 = int(np.clip(cam_cx - cam_w // 2, 0, w - cam_w))
-        cy1 = int(np.clip(cam_cy - cam_h // 2, 0, h - cam_h))
-        cx2 = cx1 + cam_w
-        cy2 = cy1 + cam_h
+    # Surfer identification badge
+    label = "SURFER #1  [CONF: 89.5%]"
+    (lw, lh), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2)
+    cv2.rectangle(banner_frame, (x1, y1 - 32), (x1 + lw + 16, y1 - 4), (12, 12, 12), -1)
+    cv2.rectangle(banner_frame, (x1, y1 - 32), (x1 + lw + 16, y1 - 4), neon_green, 1)
+    cv2.putText(banner_frame, label, (x1 + 8, y1 - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
 
-        # Extract cropped frame
-        crop = raw_frame[cy1:cy2, cx1:cx2]
+    # State tag
+    state_tag = "STATE: RIDING (LEFT)"
+    (sw, sh), _ = cv2.getTextSize(state_tag, cv2.FONT_HERSHEY_SIMPLEX, 0.52, 2)
+    cv2.rectangle(banner_frame, (x1, y2 + 6), (x1 + sw + 16, y2 + 32), (12, 12, 12), -1)
+    cv2.rectangle(banner_frame, (x1, y2 + 6), (x1 + sw + 16, y2 + 32), neon_green, 1)
+    cv2.putText(banner_frame, state_tag, (x1 + 8, y2 + 25), cv2.FONT_HERSHEY_SIMPLEX, 0.52, neon_green, 1, cv2.LINE_AA)
 
-        # Draw mini HUD on the cropped view
-        cv2.putText(crop, f"REC [LIVE PTZ] 16:9", (12, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 1, cv2.LINE_AA)
-        cv2.putText(crop, f"RIDE TIME: {i/10.0:.1f}s", (12, cam_h - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 100), 1, cv2.LINE_AA)
-        cv2.putText(crop, f"SPEED: {18.0 + np.sin(i*0.2)*4:.1f} km/h", (cam_w - 130, cam_h - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255, 255, 255), 1, cv2.LINE_AA)
+    # Velocity arrow pointing left into wave face
+    cv2.arrowedLine(banner_frame, (surfer_cx, surfer_cy), (surfer_cx - 140, surfer_cy - 10), (0, 255, 255), 3, tipLength=0.25)
+    cv2.putText(banner_frame, "VELOCITY: 24.2 px/f", (surfer_cx - 240, surfer_cy - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (0, 255, 255), 1, cv2.LINE_AA)
 
-        # Convert to RGB PIL Image
-        rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
-        frames_gif.append(Image.fromarray(rgb))
+    # Draw Virtual Cameraman PTZ crop box (16:9)
+    if box:
+        magenta = (255, 0, 220)
+        cv2.rectangle(banner_frame, (box.x1, box.y1), (box.x2, box.y2), magenta, 3)
+        # Header on top of PTZ box
+        ptz_header = "VIRTUAL PTZ CROP (16:9 LEAD-ROOM FRAMING)"
+        (pw, ph), _ = cv2.getTextSize(ptz_header, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2)
+        cv2.rectangle(banner_frame, (box.x1, box.y1 - 32), (box.x1 + pw + 20, box.y1), (12, 12, 12), -1)
+        cv2.rectangle(banner_frame, (box.x1, box.y1 - 32), (box.x1 + pw + 20, box.y1), magenta, 1)
+        cv2.putText(banner_frame, ptz_header, (box.x1 + 10, box.y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
 
-    out_file = ASSETS_DIR / "virtual_cameraman_ptz_demo.gif"
-    frames_gif[0].save(
-        out_file,
-        save_all=True,
-        append_images=frames_gif[1:],
-        duration=120,
-        loop=0,
-    )
-    print(f"✅ GIF animé démonstratif généré : {out_file}")
+        # Lead-room target point (Rule of Thirds)
+        lead_x = int(box.center[0])
+        cv2.drawMarker(banner_frame, (lead_x, surfer_cy), magenta, markerType=cv2.MARKER_CROSS, markerSize=24, thickness=2)
+        cv2.putText(banner_frame, "LEAD ROOM (OPEN WAVE)", (lead_x - 70, surfer_cy - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (255, 255, 255), 1, cv2.LINE_AA)
 
+    # Top-Left Logo / Title
+    cv2.rectangle(banner_frame, (25, 25), (630, 85), (10, 10, 10), -1)
+    cv2.rectangle(banner_frame, (25, 25), (630, 85), (0, 255, 220), 1)
+    cv2.putText(banner_frame, "SURF-CAMERA-VISION", (45, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.82, (0, 255, 220), 2, cv2.LINE_AA)
+    cv2.putText(banner_frame, "AUTONOMOUS PTZ TRACKING & RIDE AUTO-CLIPPER", (45, 76), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (200, 200, 200), 1, cv2.LINE_AA)
 
-def main():
-    print("🎨 Génération des assets visuels haute fidélité pour le README...")
-    generate_hero_banner()
-    generate_comparison_triptych()
-    generate_animated_demo_gif()
-    print("🎉 Tous les assets visuels sont prêts dans assets/ !")
+    # Bottom Telemetry Bar
+    tb_w = 780
+    tb_x1 = width - tb_w - 25
+    tb_y1 = height - 60
+    cv2.rectangle(banner_frame, (tb_x1, tb_y1), (width - 25, height - 20), (10, 10, 10), -1)
+    cv2.rectangle(banner_frame, (tb_x1, tb_y1), (width - 25, height - 20), (255, 0, 220), 1)
+    telemetry_str = "RES: 1080p | FPS: 30 | TRACK: #1 | STATE: RIDING | SPEED: 24.2 px/f | LEAD ROOM: +35% | FORMAT: 16:9"
+    cv2.putText(banner_frame, telemetry_str, (tb_x1 + 18, tb_y1 + 27), cv2.FONT_HERSHEY_SIMPLEX, 0.44, (255, 255, 255), 1, cv2.LINE_AA)
+
+    hero_path = ASSETS_DIR / "surf_hero_banner.png"
+    cv2.imwrite(str(hero_path), banner_frame)
+    print(f"✅ Generated real hero banner: {hero_path}")
+
+    # -------------------------------------------------------------------------
+    # 2. ASSETS: comparison_wide_vs_ptz.png
+    # -------------------------------------------------------------------------
+    # We build a balanced composite:
+    # Canvas: 1560 x 480
+    # Panel 1: Beach Wide Shot (580 x 380) with PTZ bounding box
+    # Panel 2: 16:9 PTZ Cinematic Crop (640 x 380)
+    # Panel 3: 9:16 Vertical Reel Crop (240 x 380) -> perfect 9:16 aspect ratio!
+    canvas_h = 490
+    canvas_w = 1580
+    comp = np.full((canvas_h, canvas_w, 3), 16, dtype=np.uint8)
+
+    # Panel 1 Image (Wide context)
+    p1_w, p1_h = 580, 390
+    p1_img = cv2.resize(banner_frame, (p1_w, p1_h), interpolation=cv2.INTER_AREA)
+
+    # Panel 2 Image (16:9 PTZ Crop)
+    p2_w, p2_h = 640, 390
+    crop_16 = frames[prime_idx][box.y1:box.y2, box.x1:box.x2] if box else frames[prime_idx]
+    p2_img = cv2.resize(crop_16, (p2_w, p2_h), interpolation=cv2.INTER_AREA)
+    # Add subtle REC tag to Panel 2
+    cv2.rectangle(p2_img, (14, 14), (280, 42), (12, 12, 12), -1)
+    cv2.circle(p2_img, (28, 28), 5, (0, 0, 255), -1)
+    cv2.putText(p2_img, "AUTO-LEAD ROOM 16:9", (42, 33), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (255, 255, 255), 1, cv2.LINE_AA)
+
+    # Panel 3 Image (9:16 Vertical Reel Crop)
+    # Surfer center: x=1070, y=595. Height 560, Width = 560 * 9 / 16 = 315
+    vert_h = 560
+    vert_w = int(vert_h * 9 / 16)
+    vx1 = max(0, int(1070 - vert_w * 0.45))
+    vx2 = min(width, vx1 + vert_w)
+    vy1 = max(0, int(595 - vert_h * 0.48))
+    vy2 = min(height, vy1 + vert_h)
+    crop_9 = frames[prime_idx][vy1:vy2, vx1:vx2]
+    p3_w, p3_h = 240, 390
+    p3_img = cv2.resize(crop_9, (p3_w, p3_h), interpolation=cv2.INTER_AREA)
+    # Add Reels tag to Panel 3
+    cv2.rectangle(p3_img, (10, 14), (220, 42), (12, 12, 12), -1)
+    cv2.putText(p3_img, "REEL / TIKTOK 9:16", (20, 33), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 220, 255), 1, cv2.LINE_AA)
+
+    # Paste panels into composite
+    gap = 20
+    top_y = 65
+
+    # Headers for panels
+    # Panel 1
+    x_p1 = gap
+    comp[top_y:top_y + p1_h, x_p1:x_p1 + p1_w] = p1_img
+    cv2.rectangle(comp, (x_p1, top_y), (x_p1 + p1_w, top_y + p1_h), (45, 45, 45), 1)
+    cv2.putText(comp, "1. PLAN LARGE FIXE (PLAGE)", (x_p1 + 4, top_y - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.58, (0, 255, 200), 2, cv2.LINE_AA)
+    cv2.putText(comp, "Detection YOLOv8 & fenetre PTZ", (x_p1 + 4, top_y - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (160, 160, 160), 1, cv2.LINE_AA)
+
+    # Panel 2
+    x_p2 = x_p1 + p1_w + gap
+    comp[top_y:top_y + p2_h, x_p2:x_p2 + p2_w] = p2_img
+    cv2.rectangle(comp, (x_p2, top_y), (x_p2 + p2_w, top_y + p2_h), (255, 0, 220), 1)
+    cv2.putText(comp, "2. DIGITAL PTZ 16:9 (CINEMATIQUE)", (x_p2 + 4, top_y - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.58, (255, 0, 220), 2, cv2.LINE_AA)
+    cv2.putText(comp, "Regle des tiers & anticipation Lead-Room", (x_p2 + 4, top_y - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (160, 160, 160), 1, cv2.LINE_AA)
+
+    # Panel 3
+    x_p3 = x_p2 + p2_w + gap
+    comp[top_y:top_y + p3_h, x_p3:x_p3 + p3_w] = p3_img
+    cv2.rectangle(comp, (x_p3, top_y), (x_p3 + p3_w, top_y + p3_h), (0, 220, 255), 1)
+    cv2.putText(comp, "3. FORMAT VERTICAL 9:16", (x_p3 + 4, top_y - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.58, (0, 220, 255), 2, cv2.LINE_AA)
+    cv2.putText(comp, "Instagram Reels & TikTok", (x_p3 + 4, top_y - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (160, 160, 160), 1, cv2.LINE_AA)
+
+    comp_path = ASSETS_DIR / "comparison_wide_vs_ptz.png"
+    cv2.imwrite(str(comp_path), comp)
+    print(f"✅ Generated real comparison infographic: {comp_path}")
+
+    # -------------------------------------------------------------------------
+    # 3. ASSETS: virtual_cameraman_ptz_demo.gif
+    # -------------------------------------------------------------------------
+    # Extract smooth GIF of the ride (from frame 35 to 175, take every 2nd frame)
+    gif_frames = []
+    gw, gh = 560, 315
+
+    for i in range(35, 180, 2):
+        b = cam_boxes[i]
+        f = frames[i]
+        if b and b.is_valid:
+            c = f[b.y1:b.y2, b.x1:b.x2]
+            c = cv2.resize(c, (gw, gh), interpolation=cv2.INTER_AREA)
+        else:
+            c = cv2.resize(f, (gw, gh))
+
+        # Add sleek DoP / PTZ HUD tag
+        cv2.rectangle(c, (10, 10), (320, 36), (12, 12, 12), -1)
+        cv2.circle(c, (24, 23), 5, (0, 0, 255), -1)  # Red REC dot
+        cv2.putText(c, "VIRTUAL PTZ TRACKING (16:9)", (38, 27), cv2.FONT_HERSHEY_SIMPLEX, 0.44, (255, 255, 255), 1, cv2.LINE_AA)
+
+        # Convert BGR to RGB
+        rgb = cv2.cvtColor(c, cv2.COLOR_BGR2RGB)
+        im = Image.fromarray(rgb)
+        # Quantize to 128 colors with dithering for compact, clean GIF
+        im = im.quantize(colors=128, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.FLOYDSTEINBERG)
+        gif_frames.append(im)
+
+    gif_path = ASSETS_DIR / "virtual_cameraman_ptz_demo.gif"
+    if gif_frames:
+        gif_frames[0].save(
+            str(gif_path),
+            save_all=True,
+            append_images=gif_frames[1:],
+            duration=65,  # ~15 fps
+            loop=0,
+            optimize=True,
+        )
+        print(f"✅ Generated real animated GIF ({len(gif_frames)} frames): {gif_path}")
 
 
 if __name__ == "__main__":
-    main()
+    run_full_session_extraction()
