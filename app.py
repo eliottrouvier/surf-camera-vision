@@ -101,8 +101,8 @@ col_src1, col_src2 = st.columns([1, 1])
 
 with col_src1:
     uploaded_file = st.file_uploader(
-        "Glisser-déposer une vidéo de surf (MP4, MOV)",
-        type=["mp4", "mov", "avi"],
+        "Glisser-déposer une vidéo de surf (MP4, MOV, AVI, MKV, WebM)",
+        type=["mp4", "mov", "avi", "mkv", "webm"],
     )
 
 with col_src2:
