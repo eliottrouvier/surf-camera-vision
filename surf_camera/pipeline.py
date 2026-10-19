@@ -34,6 +34,7 @@ class PipelineConfig:
     render_segmentation: bool = True
     consolidate_rides: bool = True
     max_merge_gap_sec: float = 2.0
+    save_split_screen: bool = True
     output_resolution: Tuple[int, int] = (1280, 720) # Resolution for exported ride clips
 
 
@@ -202,6 +203,7 @@ class SurfTrackingPipeline:
 
         # Step 7: Render Cropped Ride Clips
         rendered_clips = []
+        split_clips = []
         if save_ride_clips and len(final_rides) > 0:
             rendered_clips = self._render_ride_clips(
                 video_path=video_path,
@@ -212,6 +214,14 @@ class SurfTrackingPipeline:
                 states_history=frame_states_history,
                 fps=fps,
             )
+            if self.config.save_split_screen:
+                split_clips = self._render_split_screen_clips(
+                    video_path=video_path,
+                    out_dir=out_dir,
+                    rides=final_rides,
+                    camera_boxes=camera_boxes_history,
+                    fps=fps,
+                )
 
         if progress_callback:
             progress_callback(1.0, f"Session terminée ! {len(final_rides)} ride(s) détecté(s).")
@@ -223,6 +233,7 @@ class SurfTrackingPipeline:
             "rides": final_rides,
             "diagnostic_video": str(diag_path) if save_full_diagnostic else None,
             "ride_clips": rendered_clips,
+            "split_clips": split_clips,
         }
 
     def _render_ride_clips(
@@ -309,3 +320,114 @@ class SurfTrackingPipeline:
             clip_paths.append(str(clip_path))
 
         return clip_paths
+
+    def _render_split_screen_clips(
+        self,
+        video_path: Path,
+        out_dir: Path,
+        rides: List[RideEvent],
+        camera_boxes: List[Optional[CameraBox]],
+        fps: float,
+    ) -> List[str]:
+        """
+        Renders a dual-screen comparison video (1920x1080) for each ride:
+        - Left: Beach wide shot (16:9) with the dynamic magenta PTZ framing box.
+        - Right: The cropped video at the chosen format (e.g. 9:16 TikTok / Reels).
+        """
+        split_paths = []
+        fourcc = cv2.VideoWriter_fourcc(*"avc1")
+        canvas_w, canvas_h = 1920, 1080
+        is_vertical = (self.config.aspect_ratio == "9:16")
+
+        for ride in rides:
+            split_name = f"{video_path.stem}_ride_{ride.ride_id:02d}_split_screen_{ride.duration_sec:.1f}s.mp4"
+            split_path = out_dir / split_name
+
+            cap = cv2.VideoCapture(str(video_path))
+            cap.set(cv2.CAP_PROP_POS_FRAMES, ride.start_frame)
+
+            writer = cv2.VideoWriter(str(split_path), fourcc, fps, (canvas_w, canvas_h))
+            if not writer.isOpened():
+                writer = cv2.VideoWriter(str(split_path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (canvas_w, canvas_h))
+
+            for f_idx in range(ride.start_frame, min(ride.end_frame, len(camera_boxes))):
+                ret, frame = cap.read()
+                if not ret:
+                    break
+
+                box = camera_boxes[f_idx] if f_idx < len(camera_boxes) else None
+                canvas = np.full((canvas_h, canvas_w, 3), 13, dtype=np.uint8)
+
+                # 1. Left Wide Frame with PTZ crop box
+                wide_frame = frame.copy()
+                if box is not None and box.is_valid:
+                    cv2.rectangle(wide_frame, (box.x1, box.y1), (box.x2, box.y2), (255, 0, 220), 4)
+                    box_lbl = f"VIRTUAL PTZ [{self.config.aspect_ratio}]"
+                    cv2.rectangle(wide_frame, (box.x1, max(0, box.y1 - 32)), (box.x1 + 270, box.y1), (12, 12, 12), -1)
+                    cv2.rectangle(wide_frame, (box.x1, max(0, box.y1 - 32)), (box.x1 + 270, box.y1), (255, 0, 220), 1)
+                    cv2.putText(wide_frame, box_lbl, (box.x1 + 8, max(0, box.y1 - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
+
+                # 2. Right Cropped Frame
+                if box is not None and box.is_valid:
+                    crop = frame[box.y1:box.y2, box.x1:box.x2]
+                    if crop.size == 0 or crop.shape[0] == 0 or crop.shape[1] == 0:
+                        crop = frame
+                else:
+                    crop = frame
+
+                if is_vertical:
+                    # Precise geometry:
+                    # Left pane: 1280x720 centered vertically (y=180 to 900)
+                    left_resized = cv2.resize(wide_frame, (1280, 720), interpolation=cv2.INTER_AREA)
+                    canvas[180:900, 0:1280] = left_resized
+                    cv2.rectangle(canvas, (0, 180), (1279, 899), (45, 45, 45), 1)
+
+                    # Left Badge
+                    cv2.rectangle(canvas, (24, 196), (340, 236), (10, 10, 10), -1)
+                    cv2.rectangle(canvas, (24, 196), (340, 236), (0, 255, 200), 1)
+                    cv2.putText(canvas, "PLAN LARGE FIXE (PLAGE)", (36, 224), cv2.FONT_HERSHEY_SIMPLEX, 0.58, (0, 255, 200), 2, cv2.LINE_AA)
+
+                    # Separator
+                    cv2.line(canvas, (1280 + 16, 0), (1280 + 16, 1080), (35, 40, 50), 2)
+
+                    # Right 9:16 vertical crop (608x1080 full height)
+                    right_resized = cv2.resize(crop, (608, 1080), interpolation=cv2.INTER_AREA)
+                    canvas[0:1080, 1280+32:1920] = right_resized
+
+                    # Right Badge
+                    cv2.rectangle(canvas, (1328, 20), (1750, 60), (10, 10, 10), -1)
+                    cv2.circle(canvas, (1348, 40), 6, (0, 0, 255), -1)
+                    cv2.putText(canvas, "DIGITAL PTZ (REELS 9:16)", (1366, 47), cv2.FONT_HERSHEY_SIMPLEX, 0.58, (255, 255, 255), 2, cv2.LINE_AA)
+
+                else:
+                    # 16:9 or 1:1 layout: Two equal side-by-side 16:9 panes
+                    pane_w = 940
+                    pane_h = int(pane_w * 9 / 16)  # 528
+                    y_off = (canvas_h - pane_h) // 2
+
+                    left_resized = cv2.resize(wide_frame, (pane_w, pane_h), interpolation=cv2.INTER_AREA)
+                    canvas[y_off:y_off+pane_h, 15:15+pane_w] = left_resized
+
+                    # Left Badge
+                    cv2.rectangle(canvas, (35, y_off + 15), (340, y_off + 50), (10, 10, 10), -1)
+                    cv2.putText(canvas, "PLAN LARGE FIXE (PLAGE)", (45, y_off + 38), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 200), 2, cv2.LINE_AA)
+
+                    # Separator
+                    cv2.line(canvas, (960, 0), (960, 1080), (35, 40, 50), 2)
+
+                    # Right crop
+                    right_resized = cv2.resize(crop, (pane_w, pane_h), interpolation=cv2.INTER_AREA)
+                    canvas[y_off:y_off+pane_h, 965:965+pane_w] = right_resized
+
+                    # Right Badge
+                    cv2.rectangle(canvas, (985, y_off + 15), (1380, y_off + 50), (10, 10, 10), -1)
+                    cv2.circle(canvas, (1005, y_off + 32), 6, (0, 0, 255), -1)
+                    cv2.putText(canvas, f"DIGITAL PTZ ({self.config.aspect_ratio})", (1022, y_off + 38), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2, cv2.LINE_AA)
+
+                writer.write(canvas)
+
+            cap.release()
+            writer.release()
+            split_paths.append(str(split_path))
+
+        return split_paths

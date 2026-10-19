@@ -28,6 +28,7 @@ def main():
     parser.add_argument("--model", type=str, default="yolov8n-seg.pt", help="Poids du modèle YOLO (yolov8n-seg.pt, yolov8n.pt)")
     parser.add_argument("--no-hud", action="store_true", help="Désactiver l'affichage des métriques incrustées (HUD)")
     parser.add_argument("--no-seg", action="store_true", help="Désactiver l'affichage des masques de segmentation")
+    parser.add_argument("--no-split", action="store_true", help="Désactiver la génération de la vidéo double écran (Split-Screen)")
     args = parser.parse_args()
 
     input_path = Path(args.input)
@@ -45,6 +46,7 @@ def main():
     print(f"• Amorti cinématique    : {args.smoothing:.2f}")
     print(f"• Modèle détecteur      : {args.model}")
     print(f"• Segmentation instance : {'Désactivée' if args.no_seg else 'Activée'}")
+    print(f"• Vidéo Double Écran    : {'Désactivée' if args.no_split else 'Activée (1920x1080 Side-by-Side)'}")
     print(f"• Dossier de sortie     : {args.output_dir}")
     print("=" * 70)
 
@@ -58,6 +60,7 @@ def main():
         render_hud=not args.no_hud,
         render_segmentation=not args.no_seg,
         consolidate_rides=True,
+        save_split_screen=not args.no_split,
     )
 
     pipeline = SurfTrackingPipeline(config)
@@ -87,12 +90,17 @@ def main():
         print(f"• Vidéo diagnostic      : {results['diagnostic_video']}")
 
     if len(results["ride_clips"]) > 0:
-        print("\n🎬 Clips cinématiques découpés :")
+        print("\n🎬 Clips cinématiques recadrés :")
         for i, clip in enumerate(results["ride_clips"], 1):
             ride = results["rides"][i - 1]
             print(f"  [{i}] {clip} ({ride.duration_sec:.1f}s, direction: {ride.direction}, max speed: {ride.max_speed_px:.1f} px/f)")
-    else:
-        print("\nℹ️ Aucun ride suffisant n'a été détecté (seuil min : {args.min_duration}s).")
+
+    if len(results.get("split_clips", [])) > 0:
+        print("\n📺 Vidéos Double Écran (Side-by-Side 1080p) :")
+        for i, split_clip in enumerate(results["split_clips"], 1):
+            print(f"  [{i}] {split_clip}")
+    elif len(results["ride_clips"]) == 0:
+        print(f"\nℹ️ Aucun ride suffisant n'a été détecté (seuil min : {args.min_duration}s).")
 
 
 if __name__ == "__main__":

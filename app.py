@@ -119,15 +119,15 @@ st.sidebar.markdown("### ⚙️ Paramètres Studio")
 with st.sidebar.expander("🎥 Cadrage & Composition", expanded=True):
     aspect_option = st.selectbox(
         "Format de cadrage",
-        options=["16:9", "9:16", "1:1"],
+        options=["9:16", "16:9", "1:1"],
         index=0,
-        help="16:9 (YouTube) | 9:16 (Instagram Reels / TikTok) | 1:1 (Carré)"
+        help="9:16 (Instagram Reels / TikTok) | 16:9 (YouTube) | 1:1 (Carré)"
     )
     zoom_scale = st.slider(
         "Facteur de zoom",
         min_value=2.0,
         max_value=6.5,
-        value=3.5,
+        value=4.0,
         step=0.5,
         help="Échelle du zoom virtuel par rapport à la taille du surfeur."
     )
@@ -147,6 +147,7 @@ with st.sidebar.expander("🎥 Cadrage & Composition", expanded=True):
         step=0.01,
         help="Inertie de la rotule fluide. Valeur basse = suivi ultra-doux sans tremblement."
     )
+    enable_split_screen = st.toggle("Générer la vidéo Double Écran (Side-by-Side 1080p)", value=True)
 
 with st.sidebar.expander("🎯 Détection & Segmentation", expanded=True):
     model_choice = st.selectbox(
@@ -226,6 +227,7 @@ if video_target_path:
             render_segmentation=enable_segmentation,
             consolidate_rides=enable_consolidation,
             max_merge_gap_sec=max_merge_gap,
+            save_split_screen=enable_split_screen,
         )
 
         pipeline = SurfTrackingPipeline(config)
@@ -272,11 +274,49 @@ if "results" in st.session_state:
         st.metric("Temps de Traitement", f"{elapsed:.1f} s")
 
     # Tabs for Outputs
-    tab_clips, tab_diag, tab_telemetry = st.tabs([
-        "✂️ Clips Découpés & Recadrés",
-        "🌐 Vue Panoramique & Segmentation",
+    tab_split, tab_clips, tab_diag, tab_telemetry = st.tabs([
+        "📺 Studio Double Écran (Original vs Recadré)",
+        "✂️ Clips Recadrés",
+        "🌐 Vue Panoramique & Diagnostic",
         "📈 Analyse Cinématique"
     ])
+
+    with tab_split:
+        split_clips = results.get("split_clips", [])
+        if len(split_clips) == 0:
+            st.info("Aucune vidéo double écran disponible (activez l'option dans le volet latéral ou vérifiez qu'une vague a été détectée).")
+        else:
+            for idx, split_path in enumerate(split_clips):
+                ride = rides[idx] if idx < len(rides) else None
+                ride_name = f"Vague #{ride.ride_id} — {ride.duration_sec:.1f}s ({ride.direction})" if ride else f"Ride #{idx+1}"
+                st.markdown(f"##### 🌊 {ride_name}")
+                st.caption(f"Comparatif synchronisé 1080p : Plan large fixe plage avec carré de cadrage PTZ vs Découpage dynamique ({aspect_selected}).")
+                st.video(split_path)
+
+                col_btn_split, col_btn_crop = st.columns(2)
+                with col_btn_split:
+                    with open(split_path, "rb") as f:
+                        st.download_button(
+                            label=f"⬇️ Télécharger Double Écran (1920x1080)",
+                            data=f,
+                            file_name=Path(split_path).name,
+                            mime="video/mp4",
+                            key=f"dl_split_{idx}",
+                            use_container_width=True,
+                        )
+                with col_btn_crop:
+                    if idx < len(results.get("ride_clips", [])):
+                        crop_path = results["ride_clips"][idx]
+                        with open(crop_path, "rb") as f:
+                            st.download_button(
+                                label=f"⬇️ Télécharger Clip Seul ({aspect_selected})",
+                                data=f,
+                                file_name=Path(crop_path).name,
+                                mime="video/mp4",
+                                key=f"dl_crop_split_{idx}",
+                                use_container_width=True,
+                            )
+                st.markdown("---")
 
     with tab_clips:
         if len(results["ride_clips"]) == 0:
