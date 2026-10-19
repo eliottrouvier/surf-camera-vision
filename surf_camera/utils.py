@@ -127,8 +127,10 @@ def generate_synthetic_surf_video(
     - Surfer Riding & Carving (Frames 70 -> 170) : fast carving trajectory across the wave.
     - Kickout / Exit (Frames 170 -> 210) : exit over wave crest.
     """
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    fourcc = cv2.VideoWriter_fourcc(*"avc1")
     writer = cv2.VideoWriter(str(out_path), fourcc, fps, (width, height))
+    if not writer.isOpened():
+        writer = cv2.VideoWriter(str(out_path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height))
 
     # Surfer motion trajectory parameters
     start_x, start_y = width * 0.25, height * 0.40
