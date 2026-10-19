@@ -24,9 +24,10 @@ def main():
     parser.add_argument("--zoom-scale", type=float, default=4.5, help="Facteur de zoom virtuel par rapport au surfeur")
     parser.add_argument("--smoothing", type=float, default=0.10, help="Facteur d'amortissement cinématique (0.05=très lent, 0.20=rapide)")
     parser.add_argument("--lead-room", type=float, default=0.35, help="Espace laissé devant le surfeur sur la vague ouverte")
-    parser.add_argument("--min-duration", type=float, default=1.5, help="Durée minimale (en secondes) pour valider un ride")
-    parser.add_argument("--model", type=str, default="yolov8n.pt", help="Poids du modèle YOLO (yolov8n.pt, yolov8s.pt)")
+    parser.add_argument("--min-duration", type=float, default=1.2, help="Durée minimale (en secondes) pour valider un ride")
+    parser.add_argument("--model", type=str, default="yolov8n-seg.pt", help="Poids du modèle YOLO (yolov8n-seg.pt, yolov8n.pt)")
     parser.add_argument("--no-hud", action="store_true", help="Désactiver l'affichage des métriques incrustées (HUD)")
+    parser.add_argument("--no-seg", action="store_true", help="Désactiver l'affichage des masques de segmentation")
     args = parser.parse_args()
 
     input_path = Path(args.input)
@@ -43,6 +44,7 @@ def main():
     print(f"• Facteur Zoom          : {args.zoom_scale:.1f}x")
     print(f"• Amorti cinématique    : {args.smoothing:.2f}")
     print(f"• Modèle détecteur      : {args.model}")
+    print(f"• Segmentation instance : {'Désactivée' if args.no_seg else 'Activée'}")
     print(f"• Dossier de sortie     : {args.output_dir}")
     print("=" * 70)
 
@@ -54,6 +56,8 @@ def main():
         lead_room_factor=args.lead_room,
         min_ride_duration_sec=args.min_duration,
         render_hud=not args.no_hud,
+        render_segmentation=not args.no_seg,
+        consolidate_rides=True,
     )
 
     pipeline = SurfTrackingPipeline(config)

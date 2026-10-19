@@ -20,17 +20,20 @@ from .utils import draw_hud
 @dataclass
 class PipelineConfig:
     """Configuration settings for the Surf Tracking Pipeline."""
-    model_name: str = "yolov8n.pt"
+    model_name: str = "yolov8n-seg.pt"
     conf_threshold: float = 0.25
     aspect_ratio: str = "16:9"         # '16:9' or '9:16'
     zoom_scale: float = 4.5
     smoothing_factor: float = 0.10     # Cameraman smoothing (EMA)
     lead_room_factor: float = 0.35     # Lead-room anticipation
-    min_ride_duration_sec: float = 1.5
+    min_ride_duration_sec: float = 1.2
     speed_takeoff_thresh: float = 3.5
     pre_roll_sec: float = 2.0
     post_roll_sec: float = 1.5
     render_hud: bool = True
+    render_segmentation: bool = True
+    consolidate_rides: bool = True
+    max_merge_gap_sec: float = 2.0
     output_resolution: Tuple[int, int] = (1280, 720) # Resolution for exported ride clips
 
 
@@ -154,6 +157,9 @@ class SurfTrackingPipeline:
                         state=st,
                         speed_px=track.current_speed,
                         trajectory=track.history,
+                        mask=track.current_mask,
+                        board_mask=track.current_board_mask,
+                        render_segmentation=self.config.render_segmentation,
                     )
                 # Draw Virtual Camera Crop Window (Magenta boundary rectangle)
                 if cam_box is not None:
@@ -191,13 +197,16 @@ class SurfTrackingPipeline:
         for tid in riding_ids:
             self.state_machine._finalize_ride(tid, frame_idx, end_state=SurferState.EXIT)
 
+        # Consolidate fragmented rides into unified waves
+        final_rides = self.state_machine.get_consolidated_rides(max_gap_sec=self.config.max_merge_gap_sec) if self.config.consolidate_rides else self.state_machine.completed_rides
+
         # Step 7: Render Cropped Ride Clips
         rendered_clips = []
-        if save_ride_clips and len(self.state_machine.completed_rides) > 0:
+        if save_ride_clips and len(final_rides) > 0:
             rendered_clips = self._render_ride_clips(
                 video_path=video_path,
                 out_dir=out_dir,
-                rides=self.state_machine.completed_rides,
+                rides=final_rides,
                 camera_boxes=camera_boxes_history,
                 active_bboxes=active_surfer_history,
                 states_history=frame_states_history,
@@ -205,13 +214,13 @@ class SurfTrackingPipeline:
             )
 
         if progress_callback:
-            progress_callback(1.0, f"Session terminée ! {len(self.state_machine.completed_rides)} ride(s) détecté(s).")
+            progress_callback(1.0, f"Session terminée ! {len(final_rides)} ride(s) détecté(s).")
 
         return {
             "total_frames": frame_idx,
             "fps": fps,
-            "rides_detected": len(self.state_machine.completed_rides),
-            "rides": self.state_machine.completed_rides,
+            "rides_detected": len(final_rides),
+            "rides": final_rides,
             "diagnostic_video": str(diag_path) if save_full_diagnostic else None,
             "ride_clips": rendered_clips,
         }

@@ -26,6 +26,8 @@ class Track:
     hits: int = 1
     lost_frames: int = 0
     confirmed: bool = False
+    current_mask: Optional[np.ndarray] = None
+    current_board_mask: Optional[np.ndarray] = None
 
     @property
     def center(self) -> Tuple[float, float]:
@@ -187,6 +189,8 @@ class SurferTracker:
         track.velocities.append((vx, vy))
         track.hits += 1
         track.lost_frames = 0
+        track.current_mask = det.mask
+        track.current_board_mask = det.board_mask
 
         if track.hits >= self.min_hits_to_confirm:
             track.confirmed = True
@@ -209,5 +213,7 @@ class SurferTracker:
             hits=1,
             lost_frames=0,
             confirmed=False,
+            current_mask=det.mask,
+            current_board_mask=det.board_mask,
         )
         self.tracks[tid] = new_track
