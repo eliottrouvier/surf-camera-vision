@@ -7,11 +7,13 @@
 [![Streamlit](https://img.shields.io/badge/Streamlit-App-ff4b4b.svg)](https://streamlit.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-> **Transforme une caméra fixe (iPhone/4K posé sur un trépied sur la plage) en cameraman virtuel intelligent (Digital PTZ) qui traque, cadre avec les règles cinématiques et découpe automatiquement chaque vague surfée.**
+> **Computer Vision & Cameraman Virtuel (Digital PTZ) : segmentation d'instance (surfeur & planche), détection automatique de take-off, suivi de trajectoire et recadrage cinématique fluide de sessions de surf.**
 
-![Surf-Camera-Vision Hero Banner](./assets/surf_hero_banner.png)
-
-![Démonstration Animée du Cameraman Virtuel PTZ](./assets/virtual_cameraman_ptz_demo.gif)
+<div align="center">
+  <h3>🎯 Détection & Segmentation d'Instance en Milieu Réel (iPhone 9:16)</h3>
+  <img src="./assets/surf_vision_ai_real_demo.gif" width="360" alt="Détection IA et Segmentation de Surf sur Vidéo Réelle">
+  <p><em>Session réelle filmée depuis la plage : masques polygonaux surfeur et planche (YOLOv8-Seg), classification de posture (Paddling ➔ Take-Off ➔ Riding) et télémétrie de vitesse.</em></p>
+</div>
 
 ---
 
@@ -20,7 +22,7 @@
 Le pipeline repose sur trois composantes mathématiques simples pour le suivi et le cadrage autonome en milieu marin :
 
 ### 1. Détection du Take-Off (Classification de Posture & Cinématique)
-La transition entre la phase de rame et le surf debout est caractérisée par une inversion géométrique brutale de la boîte englobante ($w/h$) corrélée à une accélération locale :
+La transition entre la phase de rame et le surf debout est caractérisée par une inversion géométrique de la boîte englobante ($w/h$) corrélée à une accélération locale :
 
 $$\text{Rame (Paddling)} : \frac{w}{h} > 1.10 \quad\longrightarrow\quad \text{Take-Off (Riding)} : \frac{w}{h} \le 0.90 \quad \text{et} \quad \|\vec{v}\| \ge v_{\text{seuil}}$$
 
@@ -34,6 +36,12 @@ Pour reproduire le cadrage d'un cadreur professionnel et éviter de filmer l'éc
 $$c_x^{\text{cible}} = c_x^{\text{surfeur}} + \frac{v_x}{\|\vec{v}\|} \cdot (W_{\text{crop}} \times \lambda_{\text{lead}})$$
 
 Le surfeur est ainsi naturellement maintenu sur le tiers arrière du cadre, réservant les deux tiers de l'espace visuel au déroulement de la vague.
+
+<div align="center">
+  <h3>🎬 Cameraman Virtuel PTZ (Exemple Secondaire : Plan Large ➔ Recadrage)</h3>
+  <img src="./assets/virtual_cameraman_ptz_demo.gif" width="560" alt="Cameraman Virtuel PTZ">
+  <p><em>Simulation cinématique : suivi fluide avec rotule amortie (EMA) et anticipation d'ouverture de vague (Lead Room).</em></p>
+</div>
 
 ![Transformation Automatique : Du Plan Large aux Formats Cinéma et Mobile](./assets/comparison_wide_vs_ptz.png)
 
@@ -100,6 +108,9 @@ python3 track_surf.py --input ma_session.mp4 --aspect 16:9 --output-dir outputs/
 
 # Export vertical 9:16 (Instagram Reels / TikTok) + Vidéo Double Écran (Side-by-Side 1080p)
 python3 track_surf.py --input ma_session.mp4 --aspect 9:16 --lead-room 0.35 --zoom-scale 4.0
+
+# Tester directement sur la séquence iPhone réelle fournie :
+python3 track_surf.py --input data/user_surf_iphone.mov --aspect 9:16
 ```
 
 ---
