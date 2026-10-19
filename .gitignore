@@ -1,0 +1,39 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Videos & Data
+data/
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.webm
+
+# Neural network weights
+*.pt
+*.onnx
+*.engine
+yolov8*.pt
+yolov11*.pt
+
+# Outputs & temporary renders
+outputs/*
+!outputs/.gitkeep
+runs/
+
+# Streamlit
+.streamlit/
+
+# OS & IDE
+.DS_Store
+.vscode/
+.idea/
+*.swp
+
+# Virtual environments
+.venv/
+env/
+venv/
