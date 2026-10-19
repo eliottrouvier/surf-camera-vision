@@ -15,33 +15,36 @@
 
 ---
 
-## 🎯 Les 3 Piliers Algorithmiques 
+## 📐 Modélisation & Formulation Algorithmique
 
-Ce projet résout le problème du cadrage autonome par Computer Vision pure (sans balise GPS ni moteur physique), articulé autour de 3 briques mathématiques simples :
+Le pipeline repose sur trois composantes mathématiques simples pour le suivi et le cadrage autonome en milieu marin :
 
-### 1. Détection du Take-Off (Classification Rame vs Surf)
-* **Question clé :** *Comment distinguer un surfeur qui rame d'un surfeur debout sur une vague ?*
-* **Principe :** Analyse conjointe du ratio d'aspect de la silhouette ($w/h$) et du vecteur de vitesse instantanée $\vec{v}$.
-  $$\text{Allongé (Rame)} : \frac{w}{h} > 1.10 \quad\longrightarrow\quad \text{Debout (Take-Off)} : \frac{w}{h} \le 0.90 \quad \text{et} \quad \|\vec{v}\| \ge v_{\text{seuil}}$$
-* **Pratique :** Un buffer circulaire conserve en continu **2 secondes de pré-roll** (rame avant le pop-up) pour que le clip découpé contienne l'intégralité du départ.
+### 1. Détection du Take-Off (Classification de Posture & Cinématique)
+La transition entre la phase de rame et le surf debout est caractérisée par une inversion géométrique brutale de la boîte englobante ($w/h$) corrélée à une accélération locale :
+
+$$\text{Rame (Paddling)} : \frac{w}{h} > 1.10 \quad\longrightarrow\quad \text{Take-Off (Riding)} : \frac{w}{h} \le 0.90 \quad \text{et} \quad \|\vec{v}\| \ge v_{\text{seuil}}$$
+
+Un tampon circulaire conserve en continu 2 secondes de pré-roll afin de garantir la capture complète de la prise de vague dès les premiers coups de rame.
 
 ---
 
-### 2. Cadrage Cinématique & Lead-Room (Règle des Tiers)
-* **Question clé :** *Pourquoi ne pas simplement centrer la boîte du surfeur dans l'image ?*
-* **Principe :** Centrer le surfeur filme l'écume morte. Un vrai cadreur anticipe la trajectoire et décale la caméra vers l'espace libre où déferle la vague (*Lead Room*) :
-  $$c_x^{\text{cible}} = c_x^{\text{surfeur}} + \frac{v_x}{\|\vec{v}\|} \cdot (W_{\text{crop}} \times \lambda_{\text{lead}})$$
-* **Résultat :** Le surfeur est calé sur le tiers arrière de l'image, laissant **2/3 du champ ouvert** sur la face de la vague.
+### 2. Cadrage Virtuel & Lead-Room (Règle des Tiers)
+Pour reproduire le cadrage d'un cadreur professionnel et éviter de filmer l'écume morte derrière le surfeur, le centre de la caméra virtuelle est projeté en avant du mouvement selon le vecteur vitesse $\vec{v}$ :
+
+$$c_x^{\text{cible}} = c_x^{\text{surfeur}} + \frac{v_x}{\|\vec{v}\|} \cdot (W_{\text{crop}} \times \lambda_{\text{lead}})$$
+
+Le surfeur est ainsi naturellement maintenu sur le tiers arrière du cadre, réservant les deux tiers de l'espace visuel au déroulement de la vague.
 
 ![Transformation Automatique : Du Plan Large aux Formats Cinéma et Mobile](./assets/comparison_wide_vs_ptz.png)
 
 ---
 
-### 3. Amorti Fluid-Head (Lissage Temporel EMA)
-* **Question clé :** *Comment éviter que la caméra saute ou tremble avec le bruit des détections YOLO ?*
-* **Principe :** Émulation de l'inertie mécanique d'une rotule de trépied à fluide via un filtre exponentiel (EMA) appliqué aux coordonnées et dimensions $(c_x, c_y, w, h)$ :
-  $$C_t = (1 - \alpha) \cdot C_{t-1} + \alpha \cdot C_t^{\text{cible}} \quad \text{avec } \alpha \approx 0.10$$
-* **Résultat :** Travelling parfaitement fluide sans à-coups numériques, tout en restant réactif aux virages rapides (bottom turns, cutbacks).
+### 3. Amorti Cinématique (Lissage Temporel Exponentiel)
+Afin d'émuler l'inertie d'une rotule fluide de trépied et de filtrer le bruit haute fréquence des détections YOLO, les coordonnées et dimensions du cadrage $(c_x, c_y, w, h)$ sont filtrées par lissage exponentiel (EMA) :
+
+$$C_t = (1 - \alpha) \cdot C_{t-1} + \alpha \cdot C_t^{\text{cible}} \quad \text{avec } \alpha \approx 0.10$$
+
+Ce compromis élimine tout tremblement numérique tout en conservant la réactivité nécessaire lors des virages appuyés (*bottom turns*, *cutbacks*).
 
 ---
 
