@@ -96,8 +96,10 @@ class SurfTrackingPipeline:
         diag_path = out_dir / f"{video_path.stem}_tracked_overview.mp4"
         diag_writer = None
         if save_full_diagnostic:
-            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+            fourcc = cv2.VideoWriter_fourcc(*"avc1")
             diag_writer = cv2.VideoWriter(str(diag_path), fourcc, fps, (width, height))
+            if not diag_writer.isOpened():
+                diag_writer = cv2.VideoWriter(str(diag_path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height))
 
         # In-memory buffer of frame metadata and active camera boxes
         frame_history: List[np.ndarray] = []
@@ -228,7 +230,7 @@ class SurfTrackingPipeline:
         Rereads specific frame ranges and exports cropped, stabilized video clips for each ride.
         """
         clip_paths = []
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        fourcc = cv2.VideoWriter_fourcc(*"avc1")
         target_w, target_h = self.config.output_resolution
 
         if self.config.aspect_ratio == "9:16":
@@ -243,6 +245,8 @@ class SurfTrackingPipeline:
             cap.set(cv2.CAP_PROP_POS_FRAMES, ride.start_frame)
 
             writer = cv2.VideoWriter(str(clip_path), fourcc, fps, (target_w, target_h))
+            if not writer.isOpened():
+                writer = cv2.VideoWriter(str(clip_path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (target_w, target_h))
 
             for f_idx in range(ride.start_frame, min(ride.end_frame, len(camera_boxes))):
                 ret, frame = cap.read()

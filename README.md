@@ -9,6 +9,8 @@
 
 > **Un cameraman virtuel intelligent (Digital PTZ) par Computer Vision pour filmer et découper automatiquement vos vagues de surf depuis la plage.**
 
+![Surf-Camera-Vision Hero Banner](./assets/surf_hero_banner.png)
+
 ---
 
 ## 🌊 La Problématique du Surfeur
@@ -20,6 +22,8 @@ Quand on surfe seul, se filmer depuis la plage est un casse-tête :
 
 **`Surf-Camera-Vision` résout ce problème par pur traitement d'image et Computer Vision :**
 Posez simplement votre iPhone ou caméra fixe sur un trépied en plan large 4K/1080p sur la plage. L'algorithme analyse la vidéo, détecte automatiquement vos take-offs, vous suit à travers les vagues avec un **cadrage cinématique fluide (Lead Room & règle des tiers)**, et découpe chaque vague en clip individuel prêt pour YouTube (16:9) ou Instagram Reels / TikTok (9:16).
+
+![Transformation Automatique : Du Plan Large aux Clips Cadrés Pro](./assets/comparison_wide_vs_ptz.png)
 
 ---
 
@@ -33,6 +37,9 @@ Posez simplement votre iPhone ou caméra fixe sur un trépied en plan large 4K/1
   - **Lead Room & Règle des Tiers :** Anticipe le sens du déferlement (vague en droite ou en gauche) pour décentrer harmonieusement le surfeur et placer la face ouverte de la vague dans le champ.
   - **Amorti "Fluid Head" :** Lissage temporel dynamique (filtre amortisseur exponentiel) qui élimine tout tremblement numérique pour un rendu de travelling professionnel.
   - **Multi-Formats :** Export automatique en **16:9 Paysage** (HD/4K) ou **9:16 Vertical** pour les réseaux sociaux.
+
+![Démonstration Animée du Cameraman Virtuel PTZ](./assets/virtual_cameraman_ptz_demo.gif)
+
 - ✂️ **Découpage Automatique des Vagues (Ride Auto-Cut) :** Chaque vague surfée est automatiquement découpée avec un buffer de pré-roll (2s de rame avant le take-off) et post-roll.
 - 💻 **Application Web Interactive (Streamlit) :** Interface moderne pour déposer vos vidéos, ajuster le zoom et télécharger vos clips découpés.
 - ⚡ **CLI Scriptable :** Mode batch en ligne de commande pour traiter des gigaoctets de sessions en arrière-plan.
