@@ -15,7 +15,7 @@
 
 ---
 
-## 🎯 Les 3 Piliers Algorithmiques (Interview Cheat-Sheet)
+## 🎯 Les 3 Piliers Algorithmiques 
 
 Ce projet résout le problème du cadrage autonome par Computer Vision pure (sans balise GPS ni moteur physique), articulé autour de 3 briques mathématiques simples :
 
