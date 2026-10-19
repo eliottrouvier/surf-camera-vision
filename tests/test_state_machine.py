@@ -63,8 +63,8 @@ def test_takeoff_and_riding_transition():
         states = sm.update([t_ride], current_frame=f)
         assert states[1] == SurferState.RIDING
 
-    # 4. Surfer exits the wave (track disappears)
-    sm.update([], current_frame=45)
+    # 4. Surfer exits the wave (track disappears past occlusion grace period)
+    sm.update([], current_frame=90)
 
     # Validate that a RideEvent was generated
     assert len(sm.completed_rides) == 1
@@ -72,3 +72,28 @@ def test_takeoff_and_riding_transition():
     assert ride.surfer_id == 1
     assert ride.direction == "RIGHT"
     assert ride.duration_sec > 0.5
+
+
+def test_ride_consolidation_merges_fragmented_segments():
+    """Validates that fragmented rides on the same wave are fused into one continuous clip."""
+    sm = SurferStateMachine(fps=30.0)
+    from surf_camera.state_machine import RideEvent
+
+    # Simulate 2 fragmented cuts of the same wave separated by 10 frames
+    ride_a = RideEvent(
+        ride_id=1, surfer_id=1, start_frame=0, takeoff_frame=15, end_frame=75,
+        duration_frames=75, duration_sec=2.5, max_speed_px=15.0, direction="LEFT", trajectory=[]
+    )
+    ride_b = RideEvent(
+        ride_id=2, surfer_id=1, start_frame=85, takeoff_frame=85, end_frame=150,
+        duration_frames=65, duration_sec=2.1, max_speed_px=18.0, direction="LEFT", trajectory=[]
+    )
+    sm.completed_rides = [ride_a, ride_b]
+
+    consolidated = sm.get_consolidated_rides(max_gap_sec=2.0)
+    assert len(consolidated) == 1
+    assert consolidated[0].ride_id == 1
+    assert consolidated[0].start_frame == 0
+    assert consolidated[0].end_frame == 150
+    assert consolidated[0].duration_frames == 150
+    assert consolidated[0].max_speed_px == 18.0

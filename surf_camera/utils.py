@@ -31,15 +31,35 @@ def draw_hud(
     ride_time_sec: Optional[float] = None,
     trajectory: Optional[List[Tuple[float, float]]] = None,
     draw_trail: bool = True,
+    mask: Optional[np.ndarray] = None,
+    board_mask: Optional[np.ndarray] = None,
+    render_segmentation: bool = True,
 ) -> np.ndarray:
     """
-    Overlays a clean, modern HUD on the frame (bounding box, state badge,
-    surfer speed, and trajectory trail).
+    Overlays a clean, modern HUD on the frame (bounding box, segmentation mask,
+    state badge, surfer speed, and trajectory trail).
     """
     out = frame.copy()
     h, w = out.shape[:2]
     x1, y1, x2, y2 = [int(v) for v in surfer_bbox]
     color = STATE_COLORS.get(state, (0, 255, 0))
+
+    # 0. Draw semi-transparent instance segmentation mask
+    if render_segmentation:
+        if mask is not None and len(mask) >= 3:
+            overlay = out.copy()
+            pts = mask.astype(np.int32).reshape((-1, 1, 2))
+            cv2.fillPoly(overlay, [pts], color=color)
+            cv2.addWeighted(overlay, 0.35, out, 0.65, 0, out)
+            cv2.polylines(out, [pts], isClosed=True, color=color, thickness=2, lineType=cv2.LINE_AA)
+
+        if board_mask is not None and len(board_mask) >= 3:
+            overlay = out.copy()
+            board_color = (0, 220, 255)  # Cyan
+            b_pts = board_mask.astype(np.int32).reshape((-1, 1, 2))
+            cv2.fillPoly(overlay, [b_pts], color=board_color)
+            cv2.addWeighted(overlay, 0.35, out, 0.65, 0, out)
+            cv2.polylines(out, [b_pts], isClosed=True, color=board_color, thickness=2, lineType=cv2.LINE_AA)
 
     # 1. Draw glowing trajectory trail
     if draw_trail and trajectory and len(trajectory) > 1:

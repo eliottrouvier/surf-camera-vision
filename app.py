@@ -1,13 +1,11 @@
 """
-Surf-Camera-Vision: Interactive Streamlit Web Application.
+Surf-Camera-Vision: Minimalist Studio Web Application.
 Upload or load surf videos, configure virtual cameraman framing,
-and review/export automated cinematic ride cuts.
+and review/export automated cinematic ride cuts with instance segmentation.
 """
 
-import os
-import tempfile
-import time
 from pathlib import Path
+import time
 import streamlit as st
 import cv2
 import numpy as np
@@ -19,98 +17,174 @@ from surf_camera.state_machine import SurferState
 
 
 st.set_page_config(
-    page_title="Surf-Camera-Vision — Auto Cameraman",
+    page_title="Surf-Camera-Vision",
     page_icon="🏄",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# Custom CSS for modern surf aesthetic
+# --- MINIMALIST STUDIO CSS (Linear / Apple Dark Theme) ---
 st.markdown("""
 <style>
-    .main-title {
-        font-size: 2.3rem;
-        font-weight: 800;
-        background: -webkit-linear-gradient(45deg, #00c6ff, #0072ff);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        margin-bottom: 0.2rem;
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+    
+    html, body, [class*="css"] {
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
     }
-    .sub-title {
-        color: #8892b0;
-        font-size: 1.05rem;
-        margin-bottom: 1.5rem;
+    
+    .stApp {
+        background-color: #090c10;
+        color: #e6edf3;
     }
-    .metric-card {
-        background-color: #111927;
-        border: 1px solid #1f293d;
-        border-radius: 10px;
-        padding: 15px;
-        text-align: center;
+    
+    /* Header minimalist */
+    .brand-container {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 4px;
+        padding-top: 4px;
+    }
+    .brand-title {
+        font-size: 1.6rem;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+        color: #ffffff;
+    }
+    .brand-badge {
+        font-size: 0.72rem;
+        font-family: 'JetBrains Mono', monospace;
+        font-weight: 600;
+        padding: 3px 8px;
+        border-radius: 6px;
+        background-color: #161b22;
+        border: 1px solid #30363d;
+        color: #58a6ff;
+    }
+    .brand-subtitle {
+        color: #8b949e;
+        font-size: 0.92rem;
+        margin-bottom: 1.8rem;
+    }
+    
+    /* Clean Cards */
+    .studio-card {
+        background-color: #0d1117;
+        border: 1px solid #21262d;
+        border-radius: 8px;
+        padding: 16px 20px;
+        margin-bottom: 14px;
+    }
+    
+    /* Metric Card */
+    div[data-testid="stMetric"] {
+        background-color: #0d1117;
+        border: 1px solid #21262d;
+        border-radius: 8px;
+        padding: 12px 16px;
+    }
+    div[data-testid="stMetric"] label {
+        color: #8b949e !important;
+        font-size: 0.8rem !important;
+        font-weight: 500 !important;
+    }
+    div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
+        color: #ffffff !important;
+        font-family: 'JetBrains Mono', monospace !important;
+        font-size: 1.4rem !important;
+    }
+    
+    /* Buttons */
+    .stButton>button {
+        border-radius: 6px;
+        font-weight: 500;
+        font-size: 0.9rem;
+        transition: all 0.15s ease-in-out;
     }
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<div class="main-title">🏄 Surf-Camera-Vision</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-title">Cameraman Virtuel Intelligent (Digital PTZ) & Tracker de Vagues Automatisé</div>', unsafe_allow_html=True)
+# --- HEADER ---
+st.markdown("""
+<div class="brand-container">
+    <span class="brand-title">🏄 Surf-Camera-Vision</span>
+    <span class="brand-badge">STUDIO v1.2</span>
+</div>
+<div class="brand-subtitle">Cameraman virtuel intelligent (Digital PTZ) & segmentation instance de vagues</div>
+""", unsafe_allow_html=True)
 
 # --- SIDEBAR CONFIGURATION ---
-st.sidebar.header("⚙️ Paramètres du Cameraman")
+st.sidebar.markdown("### ⚙️ Paramètres Studio")
 
-aspect_option = st.sidebar.selectbox(
-    "Format de cadrage virtuel",
-    options=["16:9", "9:16", "1:1"],
-    index=0,
-    help="16:9 = Format paysage standard (YouTube) | 9:16 = Format vertical optimisé pour Instagram Reels et TikTok"
-)
-
-lead_room = st.sidebar.slider(
-    "Espace devant le surfeur (Lead Room)",
-    min_value=0.10,
-    max_value=0.50,
-    value=0.35,
-    step=0.05,
-    help="Décale le cadrage dans le sens de la vague pour placer le surfeur sur le tiers arrière et filmer la face ouverte."
-)
-
-zoom_scale = st.sidebar.slider(
-    "Facteur de zoom virtuel",
-    min_value=2.5,
-    max_value=7.0,
-    value=4.5,
-    step=0.5,
-    help="Échelle du zoom par rapport à la taille du surfeur."
-)
-
-smoothing = st.sidebar.slider(
-    "Amorti cinématique (Fluid Head)",
-    min_value=0.05,
-    max_value=0.25,
-    value=0.10,
-    step=0.01,
-    help="Plus la valeur est basse, plus le mouvement de la caméra virtuelle est doux et fluide (élimine les secousses)."
-)
-
-st.sidebar.header("🎯 Sensibilité de Détection")
-conf_thresh = st.sidebar.slider("Seuil de confiance YOLO", 0.15, 0.60, 0.25, 0.05)
-min_duration = st.sidebar.slider("Durée minimale d'un ride (s)", 1.0, 5.0, 1.5, 0.5)
-
-# --- VIDEO SOURCE SELECTION ---
-st.subheader("📹 1. Sélection de la Vidéo de Session")
-col_src1, col_src2 = st.columns([1, 1])
-
-with col_src1:
-    uploaded_file = st.file_uploader(
-        "Glisser-déposer une vidéo de surf (MP4, MOV, AVI, MKV, WebM)",
-        type=["mp4", "mov", "avi", "mkv", "webm"],
+with st.sidebar.expander("🎥 Cadrage & Composition", expanded=True):
+    aspect_option = st.selectbox(
+        "Format de cadrage",
+        options=["16:9", "9:16", "1:1"],
+        index=0,
+        help="16:9 (YouTube) | 9:16 (Instagram Reels / TikTok) | 1:1 (Carré)"
+    )
+    zoom_scale = st.slider(
+        "Facteur de zoom",
+        min_value=2.0,
+        max_value=6.5,
+        value=3.5,
+        step=0.5,
+        help="Échelle du zoom virtuel par rapport à la taille du surfeur."
+    )
+    lead_room = st.slider(
+        "Anticipation Lead-Room",
+        min_value=0.10,
+        max_value=0.50,
+        value=0.35,
+        step=0.05,
+        help="Décalage cinématique dans le sens du déferlement (règle des tiers)."
+    )
+    smoothing = st.slider(
+        "Amorti cinématique (EMA)",
+        min_value=0.04,
+        max_value=0.25,
+        value=0.10,
+        step=0.01,
+        help="Inertie de la rotule fluide. Valeur basse = suivi ultra-doux sans tremblement."
     )
 
-with col_src2:
-    use_demo = st.button("🌊 Charger la Session Démo Haute Définition", use_container_width=True)
+with st.sidebar.expander("🎯 Détection & Segmentation", expanded=True):
+    model_choice = st.selectbox(
+        "Modèle YOLO",
+        options=["yolov8n-seg.pt (Instance Segmentation)", "yolov8n.pt (Boîtes seules)"],
+        index=0,
+    )
+    model_name = "yolov8n-seg.pt" if "seg" in model_choice else "yolov8n.pt"
+    
+    enable_segmentation = st.toggle("Masques de segmentation polygonaux", value=True)
+    enable_hud = st.toggle("Afficher la télémétrie incrustée (HUD)", value=True)
+    conf_thresh = st.slider("Seuil de confiance", 0.15, 0.60, 0.20, 0.05)
 
+with st.sidebar.expander("⚡ Consolidation & Anti-Fragmentation", expanded=True):
+    enable_consolidation = st.toggle("Fusionner les segments de même vague", value=True)
+    min_active_duration = st.slider("Durée min de glisse réelle (s)", 0.8, 3.5, 1.2, 0.2)
+    max_merge_gap = st.slider("Tolérance coupure spray / écume (s)", 1.0, 3.5, 2.0, 0.5)
+    speed_thresh = st.slider("Seuil vitesse take-off (px/f)", 2.0, 6.0, 3.5, 0.5)
+
+
+# --- WORKSPACE DIRECTORIES ---
 data_dir = Path("data")
 data_dir.mkdir(parents=True, exist_ok=True)
 demo_video_path = data_dir / "sample_surf_session.mp4"
+
+# --- STEP 1: VIDEO SOURCE ---
+st.markdown("#### 1. Vidéo de Session")
+col_upload, col_demo = st.columns([3, 2])
+
+with col_upload:
+    uploaded_file = st.file_uploader(
+        "Déposer une vidéo de surf (MP4, MOV, AVI, MKV, WebM)",
+        type=["mp4", "mov", "avi", "mkv", "webm"],
+        label_visibility="collapsed"
+    )
+
+with col_demo:
+    use_demo = st.button("🌊 Charger la Session Démo (1080p)", use_container_width=True)
 
 video_target_path = None
 
@@ -119,37 +193,46 @@ if uploaded_file is not None:
     with open(temp_path, "wb") as f:
         f.write(uploaded_file.getbuffer())
     video_target_path = temp_path
-    st.success(f"Vidéo chargée : {uploaded_file.name}")
+    st.caption(f"Fichier actif : `{uploaded_file.name}`")
 elif use_demo or demo_video_path.exists():
     download_or_generate_sample_video(demo_video_path)
     video_target_path = demo_video_path
-    st.info(f"Session démo prête : {demo_video_path.name}")
+    st.caption(f"Fichier actif : `{demo_video_path.name}` (Séquence réelle 1080p)")
 
 if video_target_path:
-    st.video(str(video_target_path))
+    col_vid, col_action = st.columns([2, 1])
+    with col_vid:
+        st.video(str(video_target_path))
+    
+    with col_action:
+        st.markdown("#### 2. Traitement")
+        st.caption("Exécute la détection, la segmentation, la consolidation anti-fragmentation et le cadrage PTZ.")
+        launch_btn = st.button("🎬 Lancer le Cadrage & Découpage", type="primary", use_container_width=True)
 
-    # --- EXECUTION BUTTON ---
-    st.subheader("🚀 2. Lancement du Tracking & Cadrage")
-    if st.button("🎬 Lancer le Cameraman Virtuel & Découper les Vagues", type="primary", use_container_width=True):
+    if launch_btn:
         progress_bar = st.progress(0.0)
         status_text = st.empty()
 
         config = PipelineConfig(
-            model_name="yolov8n.pt",
+            model_name=model_name,
             conf_threshold=conf_thresh,
             aspect_ratio=aspect_option,
             zoom_scale=zoom_scale,
             smoothing_factor=smoothing,
             lead_room_factor=lead_room,
-            min_ride_duration_sec=min_duration,
-            render_hud=True,
+            min_ride_duration_sec=min_active_duration,
+            speed_takeoff_thresh=speed_thresh,
+            render_hud=enable_hud,
+            render_segmentation=enable_segmentation,
+            consolidate_rides=enable_consolidation,
+            max_merge_gap_sec=max_merge_gap,
         )
 
         pipeline = SurfTrackingPipeline(config)
 
         def update_progress(ratio: float, msg: str):
             progress_bar.progress(ratio)
-            status_text.text(msg)
+            status_text.caption(f"⚡ {msg}")
 
         start_time = time.time()
         results = pipeline.process_video(
@@ -162,81 +245,88 @@ if video_target_path:
         elapsed = time.time() - start_time
         st.session_state["results"] = results
         st.session_state["elapsed"] = elapsed
+        st.session_state["target_aspect"] = aspect_option
 
-# --- RESULTS DISPLAY ---
+
+# --- STEP 3: RESULTS & CLIPS ---
 if "results" in st.session_state:
     results = st.session_state["results"]
     elapsed = st.session_state["elapsed"]
+    aspect_selected = st.session_state.get("target_aspect", "16:9")
     rides = results["rides"]
 
     st.markdown("---")
-    st.subheader("📊 3. Résultats & Télémétrie de la Session")
+    st.markdown("#### 3. Résultats de Session")
 
     # Metrics row
     m1, m2, m3, m4 = st.columns(4)
     with m1:
-        st.metric("Vagues Détectées (Rides)", len(rides))
+        st.metric("Vagues Validées", len(rides))
     with m2:
-        total_surf_time = sum(r.duration_sec for r in rides)
-        st.metric("Temps Total Surfé", f"{total_surf_time:.1f} s")
+        total_time = sum(r.duration_sec for r in rides)
+        st.metric("Temps Surfé Cumulé", f"{total_time:.1f} s")
     with m3:
         max_speed = max([r.max_speed_px for r in rides], default=0.0)
         st.metric("Vitesse Max", f"{max_speed:.1f} px/f")
     with m4:
-        st.metric("Temps de Calcul", f"{elapsed:.1f} s")
+        st.metric("Temps de Traitement", f"{elapsed:.1f} s")
 
     # Tabs for Outputs
-    tab1, tab2, tab3 = st.tabs([
-        "🎬 Clips Cinématiques Découpés",
-        "🌐 Vue d'Ensemble & Diagnostic PTZ",
-        "📈 Analyse des Trajectoires & Vitesse"
+    tab_clips, tab_diag, tab_telemetry = st.tabs([
+        "✂️ Clips Découpés & Recadrés",
+        "🌐 Vue Panoramique & Segmentation",
+        "📈 Analyse Cinématique"
     ])
 
-    with tab1:
+    with tab_clips:
         if len(results["ride_clips"]) == 0:
-            st.warning("Aucun ride de durée suffisante n'a été détecté dans cet extrait.")
+            st.info("Aucune vague continue d'au moins " + str(min_active_duration) + "s n'a été détectée.")
         else:
-            st.markdown(f"**{len(results['ride_clips'])} clip(s) vidéo généré(s)** avec cadrage automatique et Lead Room :")
             for idx, clip_path in enumerate(results["ride_clips"]):
                 ride = rides[idx]
-                col_c1, col_c2 = st.columns([2, 1])
-                with col_c1:
+                st.markdown(f"##### Vague #{ride.ride_id} — {ride.duration_sec:.1f}s ({ride.direction})")
+                c_vid, c_info = st.columns([2, 1])
+                with c_vid:
                     st.video(clip_path)
-                with col_c2:
-                    st.markdown(f"### Vague #{ride.ride_id}")
-                    st.markdown(f"- **Direction :** `{ride.direction}` (droite/gauche)")
-                    st.markdown(f"- **Durée du ride :** `{ride.duration_sec:.1f}s`")
-                    st.markdown(f"- **Vitesse max :** `{ride.max_speed_px:.1f} px/f`")
-                    st.markdown(f"- **Take-off :** Frame `{ride.takeoff_frame}`")
+                with c_info:
+                    st.markdown(f"""
+                    - **Orientation :** `{ride.direction}`
+                    - **Durée totale :** `{ride.duration_sec:.1f}s` (avec pré/post-roll)
+                    - **Vitesse pic :** `{ride.max_speed_px:.1f} px/f`
+                    - **Départ pop-up :** `Frame #{ride.takeoff_frame}`
+                    """)
                     with open(clip_path, "rb") as f:
                         st.download_button(
-                            label=f"⬇️ Télécharger le Clip #{ride.ride_id} ({aspect_option})",
+                            label=f"⬇️ Télécharger le Clip #{ride.ride_id} ({aspect_selected})",
                             data=f,
                             file_name=Path(clip_path).name,
                             mime="video/mp4",
                             key=f"dl_{ride.ride_id}",
+                            use_container_width=True,
                         )
 
-    with tab2:
+    with tab_diag:
         if results["diagnostic_video"] and Path(results["diagnostic_video"]).exists():
-            st.markdown("Vue panoramique avec boîte de cadrage virtuel (magenta) et états du surfeur :")
+            st.caption("Flux complet avec masques de segmentation, classification de posture et fenêtre de cadrage PTZ.")
             st.video(results["diagnostic_video"])
 
-    with tab3:
+    with tab_telemetry:
         if len(rides) > 0:
-            st.markdown("#### Profil de Vitesse & Déferlement")
-            fig, ax = plt.subplots(figsize=(10, 4))
+            fig, ax = plt.subplots(figsize=(10, 3.5), facecolor="#090c10")
+            ax.set_facecolor("#0d1117")
             for r in rides:
                 frames = [p[2] for p in r.trajectory]
-                # Recompute instantaneous displacement
                 diffs = [np.sqrt((r.trajectory[i][0] - r.trajectory[i-1][0])**2 + (r.trajectory[i][1] - r.trajectory[i-1][1])**2) for i in range(1, len(r.trajectory))]
                 diffs = [diffs[0]] + diffs if diffs else [0]
-                ax.plot(frames, diffs, label=f"Ride #{r.ride_id} ({r.direction})", lw=2)
+                ax.plot(frames, diffs, label=f"Ride #{r.ride_id} ({r.direction})", color="#00ff7f", lw=2)
 
-            ax.set_title("Vitesse instantanée du surfeur au fil de la vague", fontsize=11, fontweight="bold")
-            ax.set_xlabel("Numéro de Frame")
-            ax.set_ylabel("Déplacement (pixels / frame)")
-            ax.grid(True, alpha=0.3)
-            ax.legend()
+            ax.set_title("Vitesse instantanée du surfeur", fontsize=11, fontweight="600", color="#ffffff")
+            ax.set_xlabel("Frame", color="#8b949e", fontsize=9)
+            ax.set_ylabel("Vitesse (px / frame)", color="#8b949e", fontsize=9)
+            ax.tick_params(colors="#8b949e")
+            for spine in ax.spines.values():
+                spine.set_color("#21262d")
+            ax.grid(True, alpha=0.15, color="#8b949e")
+            ax.legend(facecolor="#161b22", edgecolor="#30363d", labelcolor="#ffffff")
             st.pyplot(fig)
             plt.close()
