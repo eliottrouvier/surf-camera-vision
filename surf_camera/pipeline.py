@@ -39,7 +39,7 @@ class PipelineConfig:
     save_split_screen: bool = True
     output_resolution: Tuple[int, int] = (1280, 720) # Resolution for exported ride clips
     surfer_height_m: float = 1.85  # 6'1" (1.85 m)
-    board_length_m: float = 1.83
+    board_length_m: float = 1.73   # 5'8" (1.73 m)
     enable_wave_metrics: bool = True
 
 

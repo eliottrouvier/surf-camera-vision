@@ -169,7 +169,7 @@ with st.sidebar.expander("⚡ Consolidation & Anti-Fragmentation", expanded=True
 
 with st.sidebar.expander("🌊 Paramètres Vagues & Échelle Métrique", expanded=True):
     surfer_ref_h = st.slider("Taille du surfeur de référence (m)", 1.50, 2.05, 1.85, 0.05, help="Hauteur de référence (6'1\" = 1.85m) utilisée par le VAE pour calibrer les mètres par pixel.")
-    board_ref_l = st.slider("Longueur planche de référence (m)", 1.50, 2.70, 1.83, 0.05, help="Longueur standard de la planche (ex: 6'0\" = 1.83m).")
+    board_ref_l = st.slider("Longueur planche de référence (m)", 1.50, 2.70, 1.73, 0.05, help="Longueur standard de la planche (ex: 5'8\" = 1.73m).")
     enable_wave_metrics = st.toggle("Activer segmentation & calculs de vague", value=True)
 
 
