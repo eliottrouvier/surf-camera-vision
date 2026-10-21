@@ -25,21 +25,25 @@
 
 ## 📐 Modélisation & Formulation Algorithmique
 
-Le pipeline repose sur trois composantes mathématiques simples pour le suivi et le cadrage autonome en milieu marin :
+Le pipeline repose sur des composantes mathématiques simples pour le suivi et le cadrage autonome en milieu marin :
 
 ### 1. Détection du Take-Off (Classification de Posture & Cinématique)
-La transition entre la phase de rame et le surf debout est caractérisée par une inversion géométrique de la boîte englobante ($w/h$) corrélée à une accélération locale :
+La transition entre la phase de rame et le surf debout est caractérisée par une inversion géométrique de la boîte englobante (rapport largeur / hauteur) corrélée à une accélération locale :
 
-$$\text{Rame (Paddling)} : \frac{w}{h} > 1.10 \quad\longrightarrow\quad \text{Take-Off (Riding)} : \frac{w}{h} \le 0.90 \quad \text{et} \quad \|\vec{v}\| \ge v_{\text{seuil}}$$
+$$
+\text{Rame (Paddling)} : \frac{w}{h} > 1.10 \quad \implies \quad \text{Take-Off (Riding)} : \frac{w}{h} \le 0.90 \quad \text{et} \quad \|\vec{v}\| \ge v_{\text{seuil}}
+$$
 
 Un tampon circulaire conserve en continu 2 secondes de pré-roll afin de garantir la capture complète de la prise de vague dès les premiers coups de rame.
 
 ---
 
 ### 2. Cadrage Virtuel & Lead-Room (Règle des Tiers)
-Pour reproduire le cadrage d'un cadreur professionnel et éviter de filmer l'écume morte derrière le surfeur, le centre de la caméra virtuelle est projeté en avant du mouvement selon le vecteur vitesse $\vec{v}$ :
+Pour reproduire le cadrage d'un cadreur professionnel et éviter de filmer l'écume morte derrière le surfeur, le centre de la caméra virtuelle est projeté en avant du mouvement selon le vecteur vitesse instantané :
 
-$$c_x^{\text{cible}} = c_x^{\text{surfeur}} + \frac{v_x}{\|\vec{v}\|} \cdot (W_{\text{crop}} \times \lambda_{\text{lead}})$$
+$$
+c_x^{\text{cible}} = c_x^{\text{surfeur}} + \frac{v_x}{\|\vec{v}\|} \cdot (W_{\text{crop}} \times \lambda_{\text{lead}})
+$$
 
 Le surfeur est ainsi naturellement maintenu sur le tiers arrière du cadre, réservant les deux tiers de l'espace visuel au déroulement de la vague.
 
@@ -54,9 +58,11 @@ Le surfeur est ainsi naturellement maintenu sur le tiers arrière du cadre, rés
 ---
 
 ### 3. Amorti Cinématique (Lissage Temporel Exponentiel)
-Afin d'émuler l'inertie d'une rotule fluide de trépied et de filtrer le bruit haute fréquence des détections YOLO, les coordonnées et dimensions du cadrage $(c_x, c_y, w, h)$ sont filtrées par lissage exponentiel (EMA) :
+Afin d'émuler l'inertie d'une rotule fluide de trépied et de filtrer le bruit haute fréquence des détections YOLO, les coordonnées et dimensions du cadrage (position et taille de fenêtre) sont filtrées par lissage exponentiel (EMA) :
 
-$$C_t = (1 - \alpha) \cdot C_{t-1} + \alpha \cdot C_t^{\text{cible}} \quad \text{avec } \alpha \approx 0.10$$
+$$
+C_t = (1 - \alpha) \cdot C_{t-1} + \alpha \cdot C_t^{\text{cible}} \quad \text{avec } \alpha \approx 0.10
+$$
 
 Ce compromis élimine tout tremblement numérique tout en conservant la réactivité nécessaire lors des virages appuyés (*bottom turns*, *cutbacks*).
 
@@ -65,18 +71,22 @@ Ce compromis élimine tout tremblement numérique tout en conservant la réactiv
 ### 4. Échelle Métrique Conjointe & Latent VAE Prior (Surfeur + Planche)
 Pour convertir avec précision les pixels de caméra monoroculaire en unités métriques réelles (km/h et mètres), le module `scale_estimator.py` implémente un **Variational Autoencoder (VAE)** conjoint :
 
-$$q(z \mid \mathbf{x}) = \mathcal{N}(\boldsymbol{\mu}_z, \boldsymbol{\sigma}_z^2) \quad \text{avec } \mathbf{x} = [w_s, h_s, r_s, w_b, h_b, r_b]$$
+$$
+q(z \mid \mathbf{x}) = \mathcal{N}(\mu_z, \sigma_z^2) \quad \text{avec } \mathbf{x} = [w_s, h_s, r_s, w_b, h_b, r_b]
+$$
 
-Le décodeur reconstruit le ratio d'échelle métrique $\text{m/px}$ en combinant la taille de référence du surfeur (**6'1" / 1,85 m**) et les dimensions rigides de la planche (**5'8" / 1,73 m** sur notre vidéo de session). Ce prior probabiliste latent garantit une échelle stable même lorsque le surfeur fléchit les jambes ou que la planche est temporairement immergée sous l'écume.
+Le décodeur reconstruit le ratio d'échelle métrique en mètres par pixel en combinant la taille de référence du surfeur (**6'1" / 1,85 m**) et les dimensions rigides de la planche (**5'8" / 1,73 m** sur notre vidéo de session). Ce prior probabiliste latent garantit une échelle stable même lorsque le surfeur fléchit les jambes ou que la planche est temporairement immergée sous l'écume.
 
 ---
 
 ### 5. Segmentation Morphologique du Rouleau & Hauteur de Vague
-Le moteur `wave_analyzer.py` segmente en temps réel la masse d'eau en mouvement et le déferlement de la vague par analyse spectrale HSV (mousse blanche $V > 175, S < 75$) et gradients de luminance de Sobel ($\nabla_y I$) :
+Le moteur `wave_analyzer.py` segmente en temps réel la masse d'eau en mouvement et le déferlement de la vague par analyse spectrale HSV (mousse blanche à haute luminance) et gradients de luminance verticaux de Sobel :
 
-$$H_{\text{vague}} = (y_{\text{trough}} - y_{\text{crest}}) \cdot S_{\text{m/px}}$$
+$$
+H_{\text{vague}} = (y_{\text{trough}} - y_{\text{crest}}) \cdot S
+$$
 
-où $S_{\text{m/px}}$ représente le ratio d'échelle métrique (mètres par pixel) estimé par le prior VAE conjoint. Les vagues sont automatiquement quantifiées en mètres, en pieds et classées selon la terminologie officielle du surf (*Knee*, *Waist*, *Chest*, *Head High*, *Overhead*, *Double Overhead*).
+où $S$ représente le ratio d'échelle métrique (mètres par pixel) estimé par le prior VAE conjoint. Les vagues sont automatiquement quantifiées en mètres, en pieds et classées selon la terminologie officielle du surf (*Knee*, *Waist*, *Chest*, *Head High*, *Overhead*, *Double Overhead*).
 
 ---
 
