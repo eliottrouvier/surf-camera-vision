@@ -14,9 +14,11 @@
   <img src="./assets/surf_vision_ai_real_demo.gif" width="360" alt="Détection IA et Segmentation de Surf sur Vidéo Réelle">
   <p><em>Session réelle à Huntington Beach, CA (c'est moi 😎😎) : 
     
-    masques polygonaux surfeur et planche (YOLOv8-Seg), classification de posture (Paddling ➔ Take-Off ➔ Riding) 
+    masques polygonaux surfeur et planche (YOLOv8-Seg), 
     
-    télémétrie métrique en direct.</em></p>
+    classification de posture (Paddling ➔ Take-Off ➔ Riding) 
+    
+    télémétrie métrique en direct
 </div>
 
 ---
