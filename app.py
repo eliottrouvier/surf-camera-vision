@@ -167,6 +167,11 @@ with st.sidebar.expander("⚡ Consolidation & Anti-Fragmentation", expanded=True
     max_merge_gap = st.slider("Tolérance coupure spray / écume (s)", 1.0, 3.5, 2.0, 0.5)
     speed_thresh = st.slider("Seuil vitesse take-off (px/f)", 2.0, 6.0, 3.5, 0.5)
 
+with st.sidebar.expander("🌊 Paramètres Vagues & Échelle Métrique", expanded=True):
+    surfer_ref_h = st.slider("Taille du surfeur de référence (m)", 1.50, 2.05, 1.75, 0.05, help="Hauteur utilisée par le VAE pour calibrer les mètres par pixel.")
+    board_ref_l = st.slider("Longueur planche de référence (m)", 1.50, 2.70, 1.83, 0.05, help="Longueur standard de la planche (ex: 6'0\" = 1.83m).")
+    enable_wave_metrics = st.toggle("Activer segmentation & calculs de vague", value=True)
+
 
 # --- WORKSPACE DIRECTORIES ---
 data_dir = Path("data")
@@ -228,6 +233,9 @@ if video_target_path:
             consolidate_rides=enable_consolidation,
             max_merge_gap_sec=max_merge_gap,
             save_split_screen=enable_split_screen,
+            surfer_height_m=surfer_ref_h,
+            board_length_m=board_ref_l,
+            enable_wave_metrics=enable_wave_metrics,
         )
 
         pipeline = SurfTrackingPipeline(config)
@@ -261,24 +269,32 @@ if "results" in st.session_state:
     st.markdown("#### 3. Résultats de Session")
 
     # Metrics row
-    m1, m2, m3, m4 = st.columns(4)
+    m1, m2, m3, m4, m5, m6 = st.columns(6)
     with m1:
         st.metric("Vagues Validées", len(rides))
     with m2:
-        total_time = sum(r.duration_sec for r in rides)
-        st.metric("Temps Surfé Cumulé", f"{total_time:.1f} s")
+        max_speed = max([r.max_speed_kmh for r in rides], default=0.0)
+        st.metric("Vitesse Pic", f"{max_speed:.1f} km/h")
     with m3:
-        max_speed = max([r.max_speed_px for r in rides], default=0.0)
-        st.metric("Vitesse Max", f"{max_speed:.1f} px/f")
+        avg_speeds = [r.avg_speed_kmh for r in rides if r.avg_speed_kmh > 0]
+        avg_speed = float(np.mean(avg_speeds)) if avg_speeds else 0.0
+        st.metric("Vitesse Moyenne", f"{avg_speed:.1f} km/h")
     with m4:
-        st.metric("Temps de Traitement", f"{elapsed:.1f} s")
+        max_wave_h = max([r.wave_height_meters for r in rides], default=0.0)
+        st.metric("Vague Max", f"{max_wave_h:.2f} m", help=f"{max_wave_h*3.28084:.1f} ft")
+    with m5:
+        total_dist = sum(r.distance_meters for r in rides)
+        st.metric("Distance Totale", f"{total_dist:.0f} m")
+    with m6:
+        total_time = sum(r.duration_sec for r in rides)
+        st.metric("Temps Cumulé", f"{total_time:.1f} s")
 
     # Tabs for Outputs
     tab_split, tab_clips, tab_diag, tab_telemetry = st.tabs([
         "📺 Studio Double Écran (Original vs Recadré)",
         "✂️ Clips Recadrés",
         "🌐 Vue Panoramique & Diagnostic",
-        "📈 Analyse Cinématique"
+        "📈 Analyse Cinématique & Vagues"
     ])
 
     with tab_split:
@@ -288,7 +304,8 @@ if "results" in st.session_state:
         else:
             for idx, split_path in enumerate(split_clips):
                 ride = rides[idx] if idx < len(rides) else None
-                ride_name = f"Vague #{ride.ride_id} — {ride.duration_sec:.1f}s ({ride.direction})" if ride else f"Ride #{idx+1}"
+                wave_info = f" • Vague {ride.wave_height_meters:.1f}m ({ride.wave_category})" if (ride and ride.wave_height_meters > 0) else ""
+                ride_name = f"Vague #{ride.ride_id} — {ride.duration_sec:.1f}s ({ride.direction}){wave_info}" if ride else f"Ride #{idx+1}"
                 st.markdown(f"##### 🌊 {ride_name}")
                 st.caption(f"Comparatif synchronisé 1080p : Plan large fixe plage avec carré de cadrage PTZ vs Découpage dynamique ({aspect_selected}).")
                 st.video(split_path)
@@ -330,9 +347,12 @@ if "results" in st.session_state:
                     st.video(clip_path)
                 with c_info:
                     st.markdown(f"""
+                    - **Vitesse pic :** `{ride.max_speed_kmh:.1f} km/h`
+                    - **Vitesse moyenne :** `{ride.avg_speed_kmh:.1f} km/h`
+                    - **Hauteur de vague :** `{ride.wave_height_meters:.2f} m ({ride.wave_height_feet:.1f} ft)`
+                    - **Catégorie :** `{ride.wave_category}`
+                    - **Distance de glisse :** `{ride.distance_meters:.1f} m`
                     - **Orientation :** `{ride.direction}`
-                    - **Durée totale :** `{ride.duration_sec:.1f}s` (avec pré/post-roll)
-                    - **Vitesse pic :** `{ride.max_speed_px:.1f} px/f`
                     - **Départ pop-up :** `Frame #{ride.takeoff_frame}`
                     """)
                     with open(clip_path, "rb") as f:
@@ -347,26 +367,45 @@ if "results" in st.session_state:
 
     with tab_diag:
         if results["diagnostic_video"] and Path(results["diagnostic_video"]).exists():
-            st.caption("Flux complet avec masques de segmentation, classification de posture et fenêtre de cadrage PTZ.")
+            st.caption("Flux complet avec masques de segmentation, masse d'eau polygonale et fenêtre de cadrage PTZ.")
             st.video(results["diagnostic_video"])
 
     with tab_telemetry:
         if len(rides) > 0:
-            fig, ax = plt.subplots(figsize=(10, 3.5), facecolor="#090c10")
-            ax.set_facecolor("#0d1117")
-            for r in rides:
-                frames = [p[2] for p in r.trajectory]
-                diffs = [np.sqrt((r.trajectory[i][0] - r.trajectory[i-1][0])**2 + (r.trajectory[i][1] - r.trajectory[i-1][1])**2) for i in range(1, len(r.trajectory))]
-                diffs = [diffs[0]] + diffs if diffs else [0]
-                ax.plot(frames, diffs, label=f"Ride #{r.ride_id} ({r.direction})", color="#00ff7f", lw=2)
+            fig, (ax_spd, ax_wave) = plt.subplots(2, 1, figsize=(10, 6.0), facecolor="#090c10")
+            fig.subplots_adjust(hspace=0.35)
 
-            ax.set_title("Vitesse instantanée du surfeur", fontsize=11, fontweight="600", color="#ffffff")
-            ax.set_xlabel("Frame", color="#8b949e", fontsize=9)
-            ax.set_ylabel("Vitesse (px / frame)", color="#8b949e", fontsize=9)
-            ax.tick_params(colors="#8b949e")
-            for spine in ax.spines.values():
+            fps = results.get("fps", 30.0)
+
+            # Subplot 1: Speed in km/h
+            ax_spd.set_facecolor("#0d1117")
+            for r in rides:
+                if r.speed_series_kmh:
+                    time_axis = np.arange(len(r.speed_series_kmh)) / fps
+                    ax_spd.plot(time_axis, r.speed_series_kmh, label=f"Vague #{r.ride_id} ({r.direction} • Pic {r.max_speed_kmh:.1f} km/h)", lw=2.2)
+            ax_spd.set_title("Profil de Vitesse Réelle du Surfeur (km/h)", fontsize=11, fontweight="600", color="#ffffff")
+            ax_spd.set_xlabel("Temps de glisse (secondes)", color="#8b949e", fontsize=9)
+            ax_spd.set_ylabel("Vitesse (km/h)", color="#8b949e", fontsize=9)
+            ax_spd.tick_params(colors="#8b949e")
+            for spine in ax_spd.spines.values():
                 spine.set_color("#21262d")
-            ax.grid(True, alpha=0.15, color="#8b949e")
-            ax.legend(facecolor="#161b22", edgecolor="#30363d", labelcolor="#ffffff")
+            ax_spd.grid(True, alpha=0.15, color="#8b949e")
+            ax_spd.legend(facecolor="#161b22", edgecolor="#30363d", labelcolor="#ffffff", loc="upper left")
+
+            # Subplot 2: Wave Height in meters
+            ax_wave.set_facecolor("#0d1117")
+            for r in rides:
+                if r.wave_height_series_m:
+                    time_axis = np.arange(len(r.wave_height_series_m)) / fps
+                    ax_wave.plot(time_axis, r.wave_height_series_m, label=f"Vague #{r.ride_id} ({r.wave_category})", color="#00e5ff", lw=2.0)
+            ax_wave.set_title("Évolution de la Hauteur de Face de Vague (mètres creux ➔ crête)", fontsize=11, fontweight="600", color="#ffffff")
+            ax_wave.set_xlabel("Temps de glisse (secondes)", color="#8b949e", fontsize=9)
+            ax_wave.set_ylabel("Hauteur (mètres)", color="#8b949e", fontsize=9)
+            ax_wave.tick_params(colors="#8b949e")
+            for spine in ax_wave.spines.values():
+                spine.set_color("#21262d")
+            ax_wave.grid(True, alpha=0.15, color="#8b949e")
+            ax_wave.legend(facecolor="#161b22", edgecolor="#30363d", labelcolor="#ffffff", loc="upper left")
+
             st.pyplot(fig)
             plt.close()

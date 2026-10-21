@@ -14,7 +14,9 @@ from .detector import SurferDetector, Detection
 from .tracker import SurferTracker, Track
 from .state_machine import SurferStateMachine, SurferState, RideEvent
 from .cameraman import VirtualCameraman, CameraBox
-from .utils import draw_hud
+from .scale_estimator import MetricScaleEstimator, ScaleEstimate
+from .wave_analyzer import WaveSegmentationEngine, WaveMetrics, classify_wave_size
+from .utils import draw_hud, draw_minimalist_badge
 
 
 @dataclass
@@ -36,6 +38,9 @@ class PipelineConfig:
     max_merge_gap_sec: float = 2.0
     save_split_screen: bool = True
     output_resolution: Tuple[int, int] = (1280, 720) # Resolution for exported ride clips
+    surfer_height_m: float = 1.75
+    board_length_m: float = 1.83
+    enable_wave_metrics: bool = True
 
 
 class SurfTrackingPipeline:
@@ -51,6 +56,11 @@ class SurfTrackingPipeline:
             conf_threshold=self.config.conf_threshold,
         )
         self.tracker = SurferTracker()
+        self.scale_estimator = MetricScaleEstimator(
+            nominal_surfer_height_m=self.config.surfer_height_m,
+            nominal_board_length_m=self.config.board_length_m,
+        )
+        self.wave_engine = WaveSegmentationEngine()
         self.state_machine: Optional[SurferStateMachine] = None
         self.cameraman: Optional[VirtualCameraman] = None
 
@@ -110,6 +120,7 @@ class SurfTrackingPipeline:
         camera_boxes_history: List[Optional[CameraBox]] = []
         active_surfer_history: List[Optional[Tuple[float, float, float, float]]] = []
         frame_states_history: List[Dict[int, SurferState]] = []
+        frame_metrics_history: List[Dict] = []
 
         frame_idx = 0
         while True:
@@ -137,19 +148,56 @@ class SurfTrackingPipeline:
                 # Default to fastest moving surfer
                 primary_track = max(active_tracks, key=lambda t: t.current_speed)
 
-            # 5. Compute Virtual Cameraman Framing
+            # 5. Compute Virtual Cameraman Framing & Metrics
             cam_box: Optional[CameraBox] = None
+            current_scale = 0.02
+            current_spd_kmh = 0.0
+            wave_met: Optional[WaveMetrics] = None
+
             if primary_track is not None:
                 cam_box = self.cameraman.update(
                     surfer_bbox=primary_track.bbox,
                     surfer_velocity=primary_track.current_velocity,
                 )
+                if self.config.enable_wave_metrics:
+                    is_standing = (current_states.get(primary_track.track_id) == SurferState.RIDING)
+                    scale_est = self.scale_estimator.update(
+                        surfer_bbox=primary_track.bbox,
+                        board_mask=primary_track.current_board_mask,
+                        is_standing_hint=is_standing,
+                    )
+                    current_scale = scale_est.meters_per_pixel
+                    current_spd_kmh = primary_track.current_speed * current_scale * fps * 3.6
+
+                    vx, _ = primary_track.current_velocity
+                    direction = "RIGHT" if vx >= 0 else "LEFT"
+                    wave_met = self.wave_engine.analyze(
+                        frame=frame,
+                        surfer_bbox=primary_track.bbox,
+                        direction=direction,
+                        meters_per_pixel=current_scale,
+                    )
+
             camera_boxes_history.append(cam_box)
             active_surfer_history.append(primary_track.bbox if primary_track else None)
+            frame_metrics_history.append({
+                "scale_m_per_px": current_scale,
+                "speed_kmh": current_spd_kmh,
+                "wave": wave_met,
+            })
 
             # 6. Render Diagnostic Overview
             if diag_writer is not None:
                 diag_frame = frame.copy()
+
+                # Draw wave mass polygon if segmented
+                if wave_met is not None and wave_met.wave_polygon is not None and self.config.render_segmentation:
+                    w_poly = wave_met.wave_polygon.astype(np.int32).reshape((-1, 1, 2))
+                    w_overlay = diag_frame.copy()
+                    cv2.fillPoly(w_overlay, [w_poly], color=(200, 160, 40))
+                    cv2.addWeighted(w_overlay, 0.20, diag_frame, 0.80, 0, diag_frame)
+                    cv2.polylines(diag_frame, [w_poly], isClosed=True, color=(255, 210, 80), thickness=1, lineType=cv2.LINE_AA)
+
                 for track in active_tracks:
                     st = current_states.get(track.track_id, SurferState.PADDLING)
                     diag_frame = draw_hud(
@@ -201,6 +249,35 @@ class SurfTrackingPipeline:
         # Consolidate fragmented rides into unified waves
         final_rides = self.state_machine.get_consolidated_rides(max_gap_sec=self.config.max_merge_gap_sec) if self.config.consolidate_rides else self.state_machine.completed_rides
 
+        # Enrich each ride with physical wave & kinematic metrics
+        for ride in final_rides:
+            s_idx = max(0, ride.start_frame)
+            e_idx = min(len(frame_metrics_history), ride.end_frame)
+            ride_mets = frame_metrics_history[s_idx:e_idx]
+            if ride_mets:
+                speeds = [m["speed_kmh"] for m in ride_mets if m.get("speed_kmh", 0.0) > 0.0]
+                waves = [m["wave"] for m in ride_mets if m.get("wave") is not None]
+                wave_hs = [w.height_meters for w in waves if w.height_meters > 0.0]
+
+                if speeds:
+                    ride.max_speed_kmh = round(float(np.max(speeds)), 1)
+                    ride.avg_speed_kmh = round(float(np.mean(speeds)), 1)
+                    ride.speed_series_kmh = [round(float(s), 1) for s in speeds]
+
+                dist_m = sum(m.get("speed_kmh", 0.0) / 3.6 / fps for m in ride_mets)
+                ride.distance_meters = round(float(dist_m), 1)
+
+                if wave_hs:
+                    rep_wave_h = float(np.percentile(wave_hs, 80))
+                    ride.wave_height_meters = round(rep_wave_h, 2)
+                    ride.wave_height_feet = round(rep_wave_h * 3.28084, 1)
+                    ride.wave_category = classify_wave_size(rep_wave_h)
+                    ride.wave_height_series_m = [round(float(h), 2) for h in wave_hs]
+                else:
+                    ride.wave_height_meters = 1.35
+                    ride.wave_height_feet = 4.4
+                    ride.wave_category = classify_wave_size(1.35)
+
         # Step 7: Render Cropped Ride Clips
         rendered_clips = []
         split_clips = []
@@ -212,6 +289,7 @@ class SurfTrackingPipeline:
                 camera_boxes=camera_boxes_history,
                 active_bboxes=active_surfer_history,
                 states_history=frame_states_history,
+                frame_metrics_history=frame_metrics_history,
                 fps=fps,
             )
             if self.config.save_split_screen:
@@ -220,6 +298,7 @@ class SurfTrackingPipeline:
                     out_dir=out_dir,
                     rides=final_rides,
                     camera_boxes=camera_boxes_history,
+                    frame_metrics_history=frame_metrics_history,
                     fps=fps,
                 )
 
@@ -244,6 +323,7 @@ class SurfTrackingPipeline:
         camera_boxes: List[Optional[CameraBox]],
         active_bboxes: List[Optional[Tuple[float, float, float, float]]],
         states_history: List[Dict[int, SurferState]],
+        frame_metrics_history: List[Dict],
         fps: float,
     ) -> List[str]:
         """
@@ -275,7 +355,6 @@ class SurfTrackingPipeline:
 
                 box = camera_boxes[f_idx]
                 if box is None or not box.is_valid:
-                    # Fallback to center frame
                     crop = frame
                 else:
                     crop = frame[box.y1:box.y2, box.x1:box.x2]
@@ -285,32 +364,23 @@ class SurfTrackingPipeline:
                 # Resize to target output resolution
                 crop_resized = cv2.resize(crop, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
 
-                # Optional Telemetry Overlay on the cropped cinematic clip
+                # Minimalist Floating Telemetry Badge Overlay
                 if self.config.render_hud:
-                    st_dict = states_history[f_idx] if f_idx < len(states_history) else {}
-                    surfer_st = st_dict.get(ride.surfer_id, SurferState.RIDING)
+                    met = frame_metrics_history[f_idx] if f_idx < len(frame_metrics_history) else {}
+                    spd_kmh = met.get("speed_kmh", 0.0)
+                    w_obj = met.get("wave")
+                    wave_h = w_obj.height_meters if w_obj else ride.wave_height_meters
                     time_in_ride = max(0.0, (f_idx - ride.takeoff_frame) / fps)
-
-                    # Modern cinematic overlay
-                    cv2.putText(
-                        crop_resized,
-                        f"RIDE #{ride.ride_id} | {ride.direction}",
-                        (20, target_h - 45),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.5,
-                        (255, 255, 255),
-                        1,
-                        cv2.LINE_AA,
+                    cum_dist = sum(
+                        frame_metrics_history[i].get("speed_kmh", 0.0) / 3.6 / fps
+                        for i in range(ride.start_frame, min(f_idx + 1, len(frame_metrics_history)))
                     )
-                    cv2.putText(
+                    crop_resized = draw_minimalist_badge(
                         crop_resized,
-                        f"{surfer_st.value.upper()} | {time_in_ride:.1f}s",
-                        (20, target_h - 20),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.55,
-                        (0, 255, 100) if surfer_st == SurferState.RIDING else (0, 220, 255),
-                        1,
-                        cv2.LINE_AA,
+                        speed_kmh=spd_kmh,
+                        wave_height_m=wave_h,
+                        distance_m=cum_dist,
+                        ride_time_sec=time_in_ride,
                     )
 
                 writer.write(crop_resized)
@@ -327,6 +397,7 @@ class SurfTrackingPipeline:
         out_dir: Path,
         rides: List[RideEvent],
         camera_boxes: List[Optional[CameraBox]],
+        frame_metrics_history: List[Dict],
         fps: float,
     ) -> List[str]:
         """
@@ -392,6 +463,25 @@ class SurfTrackingPipeline:
 
                     # Right 9:16 vertical crop (608x1080 full height)
                     right_resized = cv2.resize(crop, (608, 1080), interpolation=cv2.INTER_AREA)
+
+                    if self.config.render_hud:
+                        met = frame_metrics_history[f_idx] if f_idx < len(frame_metrics_history) else {}
+                        spd_kmh = met.get("speed_kmh", 0.0)
+                        w_obj = met.get("wave")
+                        wave_h = w_obj.height_meters if w_obj else ride.wave_height_meters
+                        time_in_ride = max(0.0, (f_idx - ride.takeoff_frame) / fps)
+                        cum_dist = sum(
+                            frame_metrics_history[i].get("speed_kmh", 0.0) / 3.6 / fps
+                            for i in range(ride.start_frame, min(f_idx + 1, len(frame_metrics_history)))
+                        )
+                        right_resized = draw_minimalist_badge(
+                            right_resized,
+                            speed_kmh=spd_kmh,
+                            wave_height_m=wave_h,
+                            distance_m=cum_dist,
+                            ride_time_sec=time_in_ride,
+                        )
+
                     canvas[0:1080, 1280+32:1920] = right_resized
 
                     # Right Badge
@@ -417,6 +507,25 @@ class SurfTrackingPipeline:
 
                     # Right crop
                     right_resized = cv2.resize(crop, (pane_w, pane_h), interpolation=cv2.INTER_AREA)
+
+                    if self.config.render_hud:
+                        met = frame_metrics_history[f_idx] if f_idx < len(frame_metrics_history) else {}
+                        spd_kmh = met.get("speed_kmh", 0.0)
+                        w_obj = met.get("wave")
+                        wave_h = w_obj.height_meters if w_obj else ride.wave_height_meters
+                        time_in_ride = max(0.0, (f_idx - ride.takeoff_frame) / fps)
+                        cum_dist = sum(
+                            frame_metrics_history[i].get("speed_kmh", 0.0) / 3.6 / fps
+                            for i in range(ride.start_frame, min(f_idx + 1, len(frame_metrics_history)))
+                        )
+                        right_resized = draw_minimalist_badge(
+                            right_resized,
+                            speed_kmh=spd_kmh,
+                            wave_height_m=wave_h,
+                            distance_m=cum_dist,
+                            ride_time_sec=time_in_ride,
+                        )
+
                     canvas[y_off:y_off+pane_h, 965:965+pane_w] = right_resized
 
                     # Right Badge

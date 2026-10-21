@@ -26,6 +26,8 @@ def main():
     parser.add_argument("--lead-room", type=float, default=0.35, help="Espace laissé devant le surfeur sur la vague ouverte")
     parser.add_argument("--min-duration", type=float, default=1.2, help="Durée minimale (en secondes) pour valider un ride")
     parser.add_argument("--model", type=str, default="yolov8n-seg.pt", help="Poids du modèle YOLO (yolov8n-seg.pt, yolov8n.pt)")
+    parser.add_argument("--surfer-height", type=float, default=1.75, help="Hauteur de référence du surfeur en mètres")
+    parser.add_argument("--board-length", type=float, default=1.83, help="Longueur de référence de la planche en mètres")
     parser.add_argument("--no-hud", action="store_true", help="Désactiver l'affichage des métriques incrustées (HUD)")
     parser.add_argument("--no-seg", action="store_true", help="Désactiver l'affichage des masques de segmentation")
     parser.add_argument("--no-split", action="store_true", help="Désactiver la génération de la vidéo double écran (Split-Screen)")
@@ -61,6 +63,9 @@ def main():
         render_segmentation=not args.no_seg,
         consolidate_rides=True,
         save_split_screen=not args.no_split,
+        surfer_height_m=args.surfer_height,
+        board_length_m=args.board_length,
+        enable_wave_metrics=True,
     )
 
     pipeline = SurfTrackingPipeline(config)
@@ -93,12 +98,14 @@ def main():
         print("\n🎬 Clips cinématiques recadrés :")
         for i, clip in enumerate(results["ride_clips"], 1):
             ride = results["rides"][i - 1]
-            print(f"  [{i}] {clip} ({ride.duration_sec:.1f}s, direction: {ride.direction}, max speed: {ride.max_speed_px:.1f} px/f)")
+            print(f"  [{i}] {clip} ({ride.duration_sec:.1f}s, direction: {ride.direction}, max speed: {ride.max_speed_kmh:.1f} km/h, wave: {ride.wave_height_meters:.2f}m [{ride.wave_category}], dist: {ride.distance_meters:.1f}m)")
 
     if len(results.get("split_clips", [])) > 0:
         print("\n📺 Vidéos Double Écran (Side-by-Side 1080p) :")
         for i, split_clip in enumerate(results["split_clips"], 1):
-            print(f"  [{i}] {split_clip}")
+            ride = results["rides"][i - 1] if i - 1 < len(results["rides"]) else None
+            metric_tag = f" — Vague {ride.wave_height_meters:.1f}m | {ride.max_speed_kmh:.1f} km/h" if ride else ""
+            print(f"  [{i}] {split_clip}{metric_tag}")
     elif len(results["ride_clips"]) == 0:
         print(f"\nℹ️ Aucun ride suffisant n'a été détecté (seuil min : {args.min_duration}s).")
 

@@ -56,6 +56,24 @@ Ce compromis élimine tout tremblement numérique tout en conservant la réactiv
 
 ---
 
+### 4. Échelle Métrique Conjointe & Latent VAE Prior (Surfeur + Planche)
+Pour convertir avec précision les pixels de caméra monoroculaire en unités métriques réelles (km/h et mètres), le module `scale_estimator.py` implémente un **Variational Autoencoder (VAE)** conjoint :
+
+$$q(z \mid \mathbf{x}) = \mathcal{N}(\boldsymbol{\mu}_z, \boldsymbol{\sigma}_z^2) \quad \text{avec } \mathbf{x} = [w_s, h_s, r_s, w_b, h_b, r_b]$$
+
+Le décodeur reconstruit le ratio d'échelle métrique $\text{m/px}$ en combinant le prior physiologique du surfeur ($\approx 1.75\text{ m}$) et les dimensions rigides de la planche ($\approx 1.83\text{ m}$ / 6'0"). Ce prior probabiliste latent garantit une échelle stable même lorsque le surfeur fléchit les jambes ou que la planche est partiellement immergée sous l'écume.
+
+---
+
+### 5. Segmentation Morphologique du Rouleau & Hauteur de Vague
+Le moteur `wave_analyzer.py` segmente en temps réel la masse d'eau en mouvement et le déferlement de la vague par analyse spectrale HSV (mousse blanche $V > 175, S < 75$) et gradients de luminance de Sobel ($\nabla_y I$) :
+
+$$H_{\text{vague}} = (y_{\text{trough}} - y_{\text{crest}}) \times \text{meters\_per\_pixel}$$
+
+Les vagues sont automatiquement quantifiées en mètres, en pieds et classées selon la terminologie officielle du surf (*Knee*, *Waist*, *Chest*, *Head High*, *Overhead*, *Double Overhead*).
+
+---
+
 ## 🏗️ Architecture du Pipeline
 
 ```mermaid
@@ -136,8 +154,10 @@ surf-camera-vision/
 │   ├── tracker.py             # Spatio-temporal tracker & vitesse
 │   ├── state_machine.py       # Classification Rame -> Take-Off -> Surf
 │   ├── cameraman.py           # Digital PTZ (Lead Room & lissage)
+│   ├── scale_estimator.py     # JointScaleVAE & calibration métrique conjointe
+│   ├── wave_analyzer.py       # Segmentation de la masse d'eau & hauteur crête/creux
 │   ├── pipeline.py            # Moteur d'assemblage & encodage H.264
-│   └── utils.py               # HUD télémétrique & vidéo I/O
+│   └── utils.py               # Badge minimaliste & HUD télémétrique
 └── tests/                     # Suite de tests automatisés pytest
 ```
 

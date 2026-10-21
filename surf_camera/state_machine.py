@@ -33,6 +33,14 @@ class RideEvent:
     max_speed_px: float
     direction: str            # 'RIGHT' (frontside/backside right) or 'LEFT'
     trajectory: List[Tuple[float, float, int]]  # [(cx, cy, frame_idx), ...]
+    max_speed_kmh: float = 0.0
+    avg_speed_kmh: float = 0.0
+    distance_meters: float = 0.0
+    wave_height_meters: float = 0.0
+    wave_height_feet: float = 0.0
+    wave_category: str = "Waist High (2-3ft)"
+    speed_series_kmh: List[float] = field(default_factory=list)
+    wave_height_series_m: List[float] = field(default_factory=list)
 
 
 class SurferStateMachine:
@@ -215,6 +223,14 @@ class SurferStateMachine:
                 # Keep direction of the longer segment
                 direction = current.direction if current.duration_frames >= next_ride.duration_frames else next_ride.direction
 
+                merged_max_kmh = max(current.max_speed_kmh, next_ride.max_speed_kmh)
+                merged_dist = current.distance_meters + next_ride.distance_meters
+                merged_wave_h = max(current.wave_height_meters, next_ride.wave_height_meters)
+                merged_wave_cat = current.wave_category if current.wave_height_meters >= next_ride.wave_height_meters else next_ride.wave_category
+                combined_speeds = current.speed_series_kmh + next_ride.speed_series_kmh
+                combined_wave_hs = current.wave_height_series_m + next_ride.wave_height_series_m
+                merged_avg_kmh = float(np.mean(combined_speeds)) if combined_speeds else 0.0
+
                 current = RideEvent(
                     ride_id=current.ride_id,
                     surfer_id=current.surfer_id,
@@ -226,6 +242,14 @@ class SurferStateMachine:
                     max_speed_px=merged_max_speed,
                     direction=direction,
                     trajectory=current.trajectory + next_ride.trajectory,
+                    max_speed_kmh=round(merged_max_kmh, 1),
+                    avg_speed_kmh=round(merged_avg_kmh, 1),
+                    distance_meters=round(merged_dist, 1),
+                    wave_height_meters=round(merged_wave_h, 2),
+                    wave_height_feet=round(merged_wave_h * 3.28084, 1),
+                    wave_category=merged_wave_cat,
+                    speed_series_kmh=combined_speeds,
+                    wave_height_series_m=combined_wave_hs,
                 )
             else:
                 merged.append(current)

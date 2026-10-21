@@ -112,6 +112,68 @@ def draw_hud(
     return out
 
 
+def draw_minimalist_badge(
+    frame: np.ndarray,
+    speed_kmh: Optional[float] = None,
+    wave_height_m: Optional[float] = None,
+    distance_m: Optional[float] = None,
+    ride_time_sec: Optional[float] = None,
+    state_label: Optional[str] = None,
+) -> np.ndarray:
+    """
+    Renders an ultra-clean, minimalist floating badge on the video.
+    Linear / Apple inspired translucent dark pill with crisp typography.
+    """
+    out = frame.copy()
+    h, w = out.shape[:2]
+
+    # Build metric strings
+    items = []
+    if speed_kmh is not None and speed_kmh > 0:
+        items.append(f"{speed_kmh:.1f} KM/H")
+    if wave_height_m is not None and wave_height_m > 0:
+        items.append(f"WAVE {wave_height_m:.1f}M")
+    if distance_m is not None and distance_m > 0:
+        items.append(f"DIST {distance_m:.0f}M")
+    if ride_time_sec is not None and ride_time_sec > 0:
+        items.append(f"{ride_time_sec:.1f}S")
+
+    if not items:
+        return out
+
+    badge_text = "  •  ".join(items)
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 0.50
+    thickness = 1
+    (text_w, text_h), baseline = cv2.getTextSize(badge_text, font, font_scale, thickness)
+
+    pad_x = 16
+    pad_y = 10
+    pill_w = text_w + pad_x * 2
+    pill_h = text_h + pad_y * 2
+
+    # Position at bottom-center or bottom-left of frame
+    pill_x1 = max(15, (w - pill_w) // 2)
+    pill_y1 = h - pill_h - 22
+    pill_x2 = pill_x1 + pill_w
+    pill_y2 = pill_y1 + pill_h
+
+    # Semi-transparent glass pill background
+    overlay = out.copy()
+    cv2.rectangle(overlay, (pill_x1, pill_y1), (pill_x2, pill_y2), (10, 14, 20), -1)
+    cv2.addWeighted(overlay, 0.75, out, 0.25, 0, out)
+
+    # Subtle pill border
+    cv2.rectangle(out, (pill_x1, pill_y1), (pill_x2, pill_y2), (48, 54, 61), 1, cv2.LINE_AA)
+
+    # Crisp text
+    text_x = pill_x1 + pad_x
+    text_y = pill_y1 + pad_y + text_h - 2
+    cv2.putText(out, badge_text, (text_x, text_y), font, font_scale, (230, 237, 243), thickness, cv2.LINE_AA)
+
+    return out
+
+
 def download_or_generate_sample_video(out_path: Path, num_frames: int = 180, fps: int = 30) -> Path:
     """
     Ensures a valid sample surfing video exists at out_path.
