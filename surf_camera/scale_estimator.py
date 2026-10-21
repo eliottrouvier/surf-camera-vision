@@ -101,7 +101,7 @@ class MetricScaleEstimator:
     def __init__(
         self,
         nominal_surfer_height_m: float = 1.85,  # 6'1" (1.85 m)
-        nominal_board_length_m: float = 1.83,
+        nominal_board_length_m: float = 1.73,  # 5'8" (1.73 m)
         ema_alpha: float = 0.15,
         device: str = "cpu",
     ):
