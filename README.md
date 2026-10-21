@@ -12,7 +12,9 @@
 <div align="center">
   <h3>🎯 Détection & Segmentation d'Instance en Milieu Réel (iPhone 9:16)</h3>
   <img src="./assets/surf_vision_ai_real_demo.gif" width="360" alt="Détection IA et Segmentation de Surf sur Vidéo Réelle">
-  <p><em>Session réelle à Huntington Beach, CA (c'est moi 😎😎) : masques polygonaux surfeur et planche (YOLOv8-Seg), classification de posture (Paddling ➔ Take-Off ➔ Riding) et télémétrie métrique en direct.</em></p>
+  <p><em>Session réelle à Huntington Beach, CA (c'est moi 😎😎) : 
+    masques polygonaux surfeur et planche (YOLOv8-Seg), classification de posture (Paddling ➔ Take-Off ➔ Riding) 
+    télémétrie métrique en direct.</em></p>
 </div>
 
 ---
