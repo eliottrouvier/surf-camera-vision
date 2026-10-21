@@ -68,9 +68,9 @@ Le décodeur reconstruit le ratio d'échelle métrique $\text{m/px}$ en combinan
 ### 5. Segmentation Morphologique du Rouleau & Hauteur de Vague
 Le moteur `wave_analyzer.py` segmente en temps réel la masse d'eau en mouvement et le déferlement de la vague par analyse spectrale HSV (mousse blanche $V > 175, S < 75$) et gradients de luminance de Sobel ($\nabla_y I$) :
 
-$$H_{\text{vague}} = (y_{\text{trough}} - y_{\text{crest}}) \times \text{meters\_per\_pixel}$$
+$$H_{\text{vague}} = (y_{\text{trough}} - y_{\text{crest}}) \cdot S_{\text{m/px}}$$
 
-Les vagues sont automatiquement quantifiées en mètres, en pieds et classées selon la terminologie officielle du surf (*Knee*, *Waist*, *Chest*, *Head High*, *Overhead*, *Double Overhead*).
+où $S_{\text{m/px}}$ représente le ratio d'échelle métrique (mètres par pixel) estimé par le prior VAE conjoint. Les vagues sont automatiquement quantifiées en mètres, en pieds et classées selon la terminologie officielle du surf (*Knee*, *Waist*, *Chest*, *Head High*, *Overhead*, *Double Overhead*).
 
 ---
 
