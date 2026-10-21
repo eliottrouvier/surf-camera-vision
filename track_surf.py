@@ -26,7 +26,7 @@ def main():
     parser.add_argument("--lead-room", type=float, default=0.35, help="Espace laissé devant le surfeur sur la vague ouverte")
     parser.add_argument("--min-duration", type=float, default=1.2, help="Durée minimale (en secondes) pour valider un ride")
     parser.add_argument("--model", type=str, default="yolov8n-seg.pt", help="Poids du modèle YOLO (yolov8n-seg.pt, yolov8n.pt)")
-    parser.add_argument("--surfer-height", type=float, default=1.75, help="Hauteur de référence du surfeur en mètres")
+    parser.add_argument("--surfer-height", type=float, default=1.85, help="Hauteur de référence du surfeur en mètres (défaut : 1.85m / 6'1\")")
     parser.add_argument("--board-length", type=float, default=1.83, help="Longueur de référence de la planche en mètres")
     parser.add_argument("--no-hud", action="store_true", help="Désactiver l'affichage des métriques incrustées (HUD)")
     parser.add_argument("--no-seg", action="store_true", help="Désactiver l'affichage des masques de segmentation")

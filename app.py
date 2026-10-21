@@ -168,7 +168,7 @@ with st.sidebar.expander("⚡ Consolidation & Anti-Fragmentation", expanded=True
     speed_thresh = st.slider("Seuil vitesse take-off (px/f)", 2.0, 6.0, 3.5, 0.5)
 
 with st.sidebar.expander("🌊 Paramètres Vagues & Échelle Métrique", expanded=True):
-    surfer_ref_h = st.slider("Taille du surfeur de référence (m)", 1.50, 2.05, 1.75, 0.05, help="Hauteur utilisée par le VAE pour calibrer les mètres par pixel.")
+    surfer_ref_h = st.slider("Taille du surfeur de référence (m)", 1.50, 2.05, 1.85, 0.05, help="Hauteur de référence (6'1\" = 1.85m) utilisée par le VAE pour calibrer les mètres par pixel.")
     board_ref_l = st.slider("Longueur planche de référence (m)", 1.50, 2.70, 1.83, 0.05, help="Longueur standard de la planche (ex: 6'0\" = 1.83m).")
     enable_wave_metrics = st.toggle("Activer segmentation & calculs de vague", value=True)
 

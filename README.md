@@ -12,7 +12,7 @@
 <div align="center">
   <h3>🎯 Détection & Segmentation d'Instance en Milieu Réel (iPhone 9:16)</h3>
   <img src="./assets/surf_vision_ai_real_demo.gif" width="360" alt="Détection IA et Segmentation de Surf sur Vidéo Réelle">
-  <p><em>Session à Huntington Beach, CA (c'est moi! 😎😎) : masques polygonaux surfeur et planche (YOLOv8-Seg), classification de posture (Paddling ➔ Take-Off ➔ Riding) et télémétrie de vitesse.</em></p>
+  <p><em>Session réelle à Huntington Beach, CA (surfeur : 6'1" / 1,85 m) : masques polygonaux surfeur et planche (YOLOv8-Seg), classification de posture (Paddling ➔ Take-Off ➔ Riding) et télémétrie métrique en direct.</em></p>
 </div>
 
 ---
@@ -61,7 +61,7 @@ Pour convertir avec précision les pixels de caméra monoroculaire en unités m�
 
 $$q(z \mid \mathbf{x}) = \mathcal{N}(\boldsymbol{\mu}_z, \boldsymbol{\sigma}_z^2) \quad \text{avec } \mathbf{x} = [w_s, h_s, r_s, w_b, h_b, r_b]$$
 
-Le décodeur reconstruit le ratio d'échelle métrique $\text{m/px}$ en combinant le prior physiologique du surfeur ($\approx 1.75\text{ m}$) et les dimensions rigides de la planche ($\approx 1.83\text{ m}$ / 6'0"). Ce prior probabiliste latent garantit une échelle stable même lorsque le surfeur fléchit les jambes ou que la planche est partiellement immergée sous l'écume.
+Le décodeur reconstruit le ratio d'échelle métrique $\text{m/px}$ en combinant la taille de référence du surfeur (**6'1" / 1,85 m** sur notre vidéo de session) et les dimensions rigides de la planche ($\approx 1.83\text{ m}$ / 6'0"). Ce prior probabiliste latent garantit une échelle stable même lorsque le surfeur fléchit les jambes ou que la planche est temporairement immergée sous l'écume.
 
 ---
 
@@ -127,8 +127,8 @@ python3 track_surf.py --input ma_session.mp4 --aspect 16:9 --output-dir outputs/
 # Export vertical 9:16 (Instagram Reels / TikTok) + Vidéo Double Écran (Side-by-Side 1080p)
 python3 track_surf.py --input ma_session.mp4 --aspect 9:16 --lead-room 0.35 --zoom-scale 4.0
 
-# Tester directement sur la séquence iPhone réelle fournie :
-python3 track_surf.py --input data/user_surf_iphone.mov --aspect 9:16
+# Tester directement sur la séquence iPhone réelle (surfeur 6'1" / 1.85 m calibré) :
+python3 track_surf.py --input data/user_surf_iphone.mov --aspect 9:16 --surfer-height 1.85
 ```
 
 ---
