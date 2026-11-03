@@ -52,28 +52,35 @@ Voici le récapitulatif exhaustif de tout ce qui a été conçu et implémenté 
 
 ```
 surf-camera-vision/
-├── app.py                      # Studio Web Streamlit complet (Dark Mode Linear/Apple)
-├── track_surf.py               # Runner CLI avec arguments configurables
-├── demo.py                     # Script de démonstration rapide et d'export
-├── requirements.txt            # Dépendances (ultralytics, torch, opencv, streamlit, scipy...)
-├── pytest.ini                  # Configuration du banc de tests
-├── surf_camera/                # Package Python modulaire
-│   ├── __init__.py             # Exports propres de l'API
-│   ├── detector.py             # Détecteur YOLOv8-Seg (Personne & Planche)
-│   ├── tracker.py              # Tracker spatio-temporel (Algorithme Hongrois + Vitesse)
-│   ├── state_machine.py        # Machine à états (Paddling -> TakeOff -> Riding -> Exit)
-│   ├── cameraman.py            # Moteur de cadrage virtuel PTZ cinématique
-│   ├── scale_estimator.py      # Estimateur d'échelle métrique (Prior VAE 4D + Bayésien)
-│   ├── wave_analyzer.py        # Analyseur morphologique de vague (HSV + Sobel Y)
-│   ├── pipeline.py             # Orchestrateur de bout en bout & générateurs de flux vidéo
-│   └── utils.py                # Badge télémétrique minimaliste, HUD & synthétiseur vidéo
-├── tests/                      # Suite de tests unitaires (15 tests, 100% passing)
-│   ├── test_cameraman.py       # Validation lead-room, clamping, damping
-│   ├── test_state_machine.py   # Validation transitions d'états et fusion anti-fragmentation
-│   ├── test_wave_metrics.py    # Validation VAE, estimation d'échelle, vagues, badges
-│   └── test_pipeline.py        # Test d'intégration de bout en bout
-└── notes_personnelles/         # Espace de travail & documentations de référence
-    ├── README.md               # Présentation du dossier de notes
+├── launch_app.command         # 🍏 Lanceur 1-clic macOS (double-clic Finder)
+├── launch_app.bat             # 🪟 Lanceur 1-clic Windows (double-clic)
+├── start.sh                   # 🐧 Lanceur terminal Linux / macOS
+├── config.yaml                # ⚙️ Configuration centralisée & valeurs par défaut
+├── app.py                     # Studio Web Streamlit complet (Dark Mode Linear/Apple)
+├── track_surf.py              # Runner CLI (support cm & ft/in)
+├── demo.py                    # Script de démonstration rapide et d'export
+├── packages.txt               # Dépendances système Streamlit Cloud (ffmpeg, libgl1)
+├── requirements.txt           # Dépendances (ultralytics, torch, opencv, streamlit, pyyaml...)
+├── pytest.ini                 # Configuration du banc de tests
+├── surf_camera/               # Package Python modulaire
+│   ├── __init__.py            # Exports propres de l'API
+│   ├── config.py              # Gestionnaire config.yaml & conversion d'unités (cm, ft/in)
+│   ├── detector.py            # Détecteur YOLOv8-Seg (Personne & Planche)
+│   ├── tracker.py             # Tracker spatio-temporel (Algorithme Hongrois + Vitesse)
+│   ├── state_machine.py       # Machine à états (Paddling -> TakeOff -> Riding -> Exit)
+│   ├── cameraman.py           # Moteur de cadrage virtuel PTZ cinématique
+│   ├── scale_estimator.py     # Estimateur d'échelle métrique (Prior VAE 4D + Bayésien)
+│   ├── wave_analyzer.py       # Analyseur morphologique de vague (HSV + Sobel Y)
+│   ├── pipeline.py            # Orchestrateur de bout en bout & générateurs de flux vidéo
+│   └── utils.py               # Badge télémétrique minimaliste (KM/H, M/FT) & HUD
+├── tests/                     # Suite de tests unitaires (20 tests, 100% passing)
+│   ├── test_cameraman.py      # Validation lead-room, clamping, damping
+│   ├── test_config.py         # Validation persistance config.yaml & conversions d'unités
+│   ├── test_state_machine.py  # Validation transitions d'états et fusion anti-fragmentation
+│   ├── test_wave_metrics.py   # Validation VAE, estimation d'échelle, vagues, badges
+│   └── test_pipeline.py       # Test d'intégration de bout en bout
+└── notes_personnelles/        # Espace de travail & documentations de référence
+    ├── README.md              # Présentation du dossier de notes
     └── GUIDE_COMPLET_PROJET_SURF_VISION.md  # Ce guide exhaustif
 ```
 

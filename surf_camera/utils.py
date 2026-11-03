@@ -119,10 +119,12 @@ def draw_minimalist_badge(
     distance_m: Optional[float] = None,
     ride_time_sec: Optional[float] = None,
     state_label: Optional[str] = None,
+    max_speed_kmh: Optional[float] = None,
 ) -> np.ndarray:
     """
     Renders an ultra-clean, minimalist floating badge on the video.
     Linear / Apple inspired translucent dark pill with crisp typography.
+    Displays speed in KM/H (with max speed if provided), wave height in dual units (meters and feet).
     """
     out = frame.copy()
     h, w = out.shape[:2]
@@ -130,9 +132,16 @@ def draw_minimalist_badge(
     # Build metric strings
     items = []
     if speed_kmh is not None and speed_kmh > 0:
-        items.append(f"{speed_kmh:.1f} KM/H")
+        if max_speed_kmh is not None and max_speed_kmh > speed_kmh:
+            items.append(f"{speed_kmh:.1f} KM/H [MAX {max_speed_kmh:.1f}]")
+        else:
+            items.append(f"{speed_kmh:.1f} KM/H")
+    elif max_speed_kmh is not None and max_speed_kmh > 0:
+        items.append(f"MAX {max_speed_kmh:.1f} KM/H")
+
     if wave_height_m is not None and wave_height_m > 0:
-        items.append(f"WAVE {wave_height_m:.1f}M")
+        feet = wave_height_m * 3.28084
+        items.append(f"WAVE {wave_height_m:.2f}M / {feet:.1f}FT")
     if distance_m is not None and distance_m > 0:
         items.append(f"DIST {distance_m:.0f}M")
     if ride_time_sec is not None and ride_time_sec > 0:

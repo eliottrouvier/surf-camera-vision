@@ -1,8 +1,8 @@
 """
 CLI Runner for Surf-Camera-Vision.
 Usage:
-    python track_surf.py --input session.mp4 --output-dir outputs/ --aspect 16:9
-    python track_surf.py --input session.mp4 --aspect 9:16 --lead-room 0.40
+    python track_surf.py --input session.mp4
+    python track_surf.py --input session.mp4 --aspect 9:16 --surfer-height-cm 185 --board-length-ft-in "5'8\""
 """
 
 import argparse
@@ -11,23 +11,42 @@ import time
 from pathlib import Path
 
 from surf_camera.pipeline import SurfTrackingPipeline, PipelineConfig
+from surf_camera.config import (
+    load_config,
+    cm_to_meters,
+    parse_ft_in,
+    format_surfer_height,
+    format_wave_dual_units,
+)
 
 
 def main():
+    cfg = load_config()
+
     parser = argparse.ArgumentParser(
         description="Surf-Camera-Vision: Autonomous Virtual PTZ Cameraman for Surfers"
     )
     parser.add_argument("--input", "-i", type=str, required=True, help="Chemin vers la vidéo de surf (.mp4, .mov)")
     parser.add_argument("--output-dir", "-o", type=str, default="outputs", help="Dossier d'exportation des clips")
-    parser.add_argument("--aspect", "-a", type=str, default="16:9", choices=["16:9", "9:16", "1:1"],
-                        help="Format de cadrage virtuel (16:9 paysage ou 9:16 vertical TikTok/Reel)")
-    parser.add_argument("--zoom-scale", type=float, default=4.5, help="Facteur de zoom virtuel par rapport au surfeur")
-    parser.add_argument("--smoothing", type=float, default=0.10, help="Facteur d'amortissement cinématique (0.05=très lent, 0.20=rapide)")
-    parser.add_argument("--lead-room", type=float, default=0.35, help="Espace laissé devant le surfeur sur la vague ouverte")
-    parser.add_argument("--min-duration", type=float, default=1.2, help="Durée minimale (en secondes) pour valider un ride")
-    parser.add_argument("--model", type=str, default="yolov8n-seg.pt", help="Poids du modèle YOLO (yolov8n-seg.pt, yolov8n.pt)")
-    parser.add_argument("--surfer-height", type=float, default=1.85, help="Hauteur de référence du surfeur en mètres (défaut : 1.85m / 6'1\")")
-    parser.add_argument("--board-length", type=float, default=1.73, help="Longueur de référence de la planche en mètres (défaut : 1.73m / 5'8\")")
+    parser.add_argument("--config", "-c", type=str, default=None, help="Chemin vers un fichier config.yaml alternatif")
+    parser.add_argument("--aspect", "-a", type=str, default=cfg["cameraman"]["aspect_ratio"], choices=["16:9", "9:16", "1:1"],
+                        help="Format de cadrage virtuel (9:16 vertical TikTok/Reel ou 16:9 paysage)")
+    parser.add_argument("--zoom-scale", type=float, default=cfg["cameraman"]["zoom_scale"], help="Facteur de zoom virtuel")
+    parser.add_argument("--smoothing", type=float, default=cfg["cameraman"]["smoothing_factor"], help="Amortissement cinématique EMA")
+    parser.add_argument("--lead-room", type=float, default=cfg["cameraman"]["lead_room_factor"], help="Anticipation règle des tiers")
+    parser.add_argument("--min-duration", type=float, default=cfg["state_machine"]["min_ride_duration_sec"], help="Durée min pour valider un ride (s)")
+    parser.add_argument("--model", type=str, default=cfg["detection"]["model_name"], help="Poids YOLO (yolov8n-seg.pt, yolov8n.pt)")
+
+    # Units: favored cm for surfer, ft/in for board
+    parser.add_argument("--surfer-height-cm", type=float, default=cfg["surfer"]["height_cm"],
+                        help="Taille du surfeur en centimètres (ex: 185)")
+    parser.add_argument("--surfer-height", type=float, default=None,
+                        help="Taille du surfeur en mètres (ex: 1.85)")
+    parser.add_argument("--board-length-ft-in", type=str, default=cfg["surfboard"]["length_ft_in"],
+                        help="Longueur de planche en pieds et pouces (ex: 5'8\")")
+    parser.add_argument("--board-length", type=float, default=None,
+                        help="Longueur de planche en mètres (ex: 1.73)")
+
     parser.add_argument("--no-hud", action="store_true", help="Désactiver l'affichage des métriques incrustées (HUD)")
     parser.add_argument("--no-seg", action="store_true", help="Désactiver l'affichage des masques de segmentation")
     parser.add_argument("--no-split", action="store_true", help="Désactiver la génération de la vidéo double écran (Split-Screen)")
@@ -38,19 +57,37 @@ def main():
         print(f"❌ Erreur : Fichier vidéo introuvable : {input_path}")
         sys.exit(1)
 
-    print("=" * 70)
-    print("  🏄 Surf-Camera-Vision — Cameraman Virtuel & Tracker de Rides")
-    print("=" * 70)
+    # Resolve surfer height (favoring cm)
+    if args.surfer_height is not None:
+        surfer_h_m = args.surfer_height
+        surfer_h_cm = surfer_h_m * 100.0
+    else:
+        surfer_h_cm = args.surfer_height_cm
+        surfer_h_m = cm_to_meters(surfer_h_cm)
+
+    # Resolve board length (favoring ft/in)
+    if args.board_length is not None:
+        board_l_m = args.board_length
+        board_str = f"{board_l_m:.2f} m"
+    else:
+        board_str = args.board_length_ft_in
+        board_l_m = parse_ft_in(board_str)
+
+    print("=" * 75)
+    print("  🏄 Surf-Camera-Vision — Cameraman Virtuel & Télémétrie de Rides")
+    print("=" * 75)
     print(f"• Vidéo d'entrée        : {input_path}")
     print(f"• Format de cadrage     : {args.aspect}")
     print(f"• Facteur Lead Room     : {args.lead_room:.2f}")
     print(f"• Facteur Zoom          : {args.zoom_scale:.1f}x")
     print(f"• Amorti cinématique    : {args.smoothing:.2f}")
+    print(f"• Taille Surfeur (ref)  : {format_surfer_height(surfer_h_cm)}")
+    print(f"• Taille Planche (ref)  : {board_str} ({board_l_m:.2f} m)")
     print(f"• Modèle détecteur      : {args.model}")
-    print(f"• Segmentation instance : {'Désactivée' if args.no_seg else 'Activée'}")
+    print(f"• Télémétrie & Masques  : {'Désactivés' if args.no_hud else 'Activés'}")
     print(f"• Vidéo Double Écran    : {'Désactivée' if args.no_split else 'Activée (1920x1080 Side-by-Side)'}")
-    print(f"• Dossier de sortie     : {args.output_dir}")
-    print("=" * 70)
+    print(f"• Dossier d'export      : {args.output_dir}")
+    print("=" * 75)
 
     config = PipelineConfig(
         model_name=args.model,
@@ -63,8 +100,8 @@ def main():
         render_segmentation=not args.no_seg,
         consolidate_rides=True,
         save_split_screen=not args.no_split,
-        surfer_height_m=args.surfer_height,
-        board_length_m=args.board_length,
+        surfer_height_m=surfer_h_m,
+        board_length_m=board_l_m,
         enable_wave_metrics=True,
     )
 
@@ -98,13 +135,17 @@ def main():
         print("\n🎬 Clips cinématiques recadrés :")
         for i, clip in enumerate(results["ride_clips"], 1):
             ride = results["rides"][i - 1]
-            print(f"  [{i}] {clip} ({ride.duration_sec:.1f}s, direction: {ride.direction}, max speed: {ride.max_speed_kmh:.1f} km/h, wave: {ride.wave_height_meters:.2f}m [{ride.wave_category}], dist: {ride.distance_meters:.1f}m)")
+            wave_text = format_wave_dual_units(ride.wave_height_meters)
+            print(f"  [{i}] {clip}")
+            print(f"      ⚡ Vitesse Pic : {ride.max_speed_kmh:.1f} km/h (Moyenne : {ride.avg_speed_kmh:.1f} km/h)")
+            print(f"      🌊 Taille Vague: {wave_text} [{ride.wave_category}]")
+            print(f"      ⏱️ Durée       : {ride.duration_sec:.1f}s ({ride.direction}) | Glisse : {ride.distance_meters:.1f}m")
 
     if len(results.get("split_clips", [])) > 0:
         print("\n📺 Vidéos Double Écran (Side-by-Side 1080p) :")
         for i, split_clip in enumerate(results["split_clips"], 1):
             ride = results["rides"][i - 1] if i - 1 < len(results["rides"]) else None
-            metric_tag = f" — Vague {ride.wave_height_meters:.1f}m | {ride.max_speed_kmh:.1f} km/h" if ride else ""
+            metric_tag = f" — Vitesse max: {ride.max_speed_kmh:.1f} km/h | Vague: {ride.wave_height_meters:.2f}m ({ride.wave_height_feet:.1f}ft)" if ride else ""
             print(f"  [{i}] {split_clip}{metric_tag}")
     elif len(results["ride_clips"]) == 0:
         print(f"\nℹ️ Aucun ride suffisant n'a été détecté (seuil min : {args.min_duration}s).")

@@ -38,9 +38,33 @@ class PipelineConfig:
     max_merge_gap_sec: float = 2.0
     save_split_screen: bool = True
     output_resolution: Tuple[int, int] = (1280, 720) # Resolution for exported ride clips
-    surfer_height_m: float = 1.85  # 6'1" (1.85 m)
+    surfer_height_m: float = 1.85  # 185 cm / 6'1" (1.85 m)
     board_length_m: float = 1.73   # 5'8" (1.73 m)
     enable_wave_metrics: bool = True
+
+    @classmethod
+    def from_yaml(cls, path: Optional[str] = None) -> "PipelineConfig":
+        """Builds PipelineConfig from config.yaml with fallback to defaults."""
+        from .config import load_config
+        cfg = load_config(path)
+        return cls(
+            model_name=cfg["detection"]["model_name"],
+            conf_threshold=cfg["detection"]["conf_threshold"],
+            aspect_ratio=cfg["cameraman"]["aspect_ratio"],
+            zoom_scale=cfg["cameraman"]["zoom_scale"],
+            smoothing_factor=cfg["cameraman"]["smoothing_factor"],
+            lead_room_factor=cfg["cameraman"]["lead_room_factor"],
+            min_ride_duration_sec=cfg["state_machine"]["min_ride_duration_sec"],
+            speed_takeoff_thresh=cfg["state_machine"]["speed_takeoff_thresh"],
+            max_merge_gap_sec=cfg["state_machine"]["max_merge_gap_sec"],
+            consolidate_rides=cfg["state_machine"]["consolidate_rides"],
+            render_hud=cfg["detection"]["enable_hud"],
+            render_segmentation=cfg["detection"]["enable_segmentation"],
+            save_split_screen=cfg["cameraman"]["enable_split_screen"],
+            surfer_height_m=cfg["surfer"]["height_m"],
+            board_length_m=cfg["surfboard"]["length_m"],
+            enable_wave_metrics=cfg["wave_metrics"]["enable"],
+        )
 
 
 class SurfTrackingPipeline:
@@ -381,6 +405,7 @@ class SurfTrackingPipeline:
                         wave_height_m=wave_h,
                         distance_m=cum_dist,
                         ride_time_sec=time_in_ride,
+                        max_speed_kmh=ride.max_speed_kmh,
                     )
 
                 writer.write(crop_resized)
@@ -480,6 +505,7 @@ class SurfTrackingPipeline:
                             wave_height_m=wave_h,
                             distance_m=cum_dist,
                             ride_time_sec=time_in_ride,
+                            max_speed_kmh=ride.max_speed_kmh,
                         )
 
                     canvas[0:1080, 1280+32:1920] = right_resized
@@ -524,6 +550,7 @@ class SurfTrackingPipeline:
                             wave_height_m=wave_h,
                             distance_m=cum_dist,
                             ride_time_sec=time_in_ride,
+                            max_speed_kmh=ride.max_speed_kmh,
                         )
 
                     canvas[y_off:y_off+pane_h, 965:965+pane_w] = right_resized

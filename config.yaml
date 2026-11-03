@@ -1,0 +1,26 @@
+profile_name: Eliott Session (Huntington Beach)
+surfer:
+  height_cm: 185.0
+  height_m: 1.85
+surfboard:
+  length_ft_in: 5'8"
+  length_m: 1.73
+cameraman:
+  aspect_ratio: '9:16'
+  zoom_scale: 4.0
+  smoothing_factor: 0.1
+  lead_room_factor: 0.35
+  enable_split_screen: true
+detection:
+  model_name: yolov8n-seg.pt
+  conf_threshold: 0.2
+  enable_segmentation: true
+  enable_hud: true
+state_machine:
+  min_ride_duration_sec: 1.2
+  speed_takeoff_thresh: 3.5
+  max_merge_gap_sec: 2.0
+  consolidate_rides: true
+wave_metrics:
+  enable: true
+  units: dual_metric_imperial

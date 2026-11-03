@@ -1,10 +1,11 @@
 # 🏄 Surf-Camera-Vision : Autonomous Virtual PTZ (pan-tilt-zoom) 
 
+[![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://share.streamlit.io)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-ee4c2c.svg)](https://pytorch.org/)
 [![YOLOv8](https://img.shields.io/badge/YOLO-Ultralytics-00ffff.svg)](https://docs.ultralytics.com/)
 [![OpenCV](https://img.shields.io/badge/OpenCV-Computer%20Vision-5c3ee8.svg)](https://opencv.org/)
-[![Streamlit](https://img.shields.io/badge/Streamlit-App-ff4b4b.svg)](https://streamlit.io/)
+[![Streamlit](https://img.shields.io/badge/Streamlit-Studio%20v0.2.1-ff4b4b.svg)](https://streamlit.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 > **Computer Vision & Cameraman Virtuel (Digital PTZ) : segmentation d'instance (surfeur & planche), détection automatique de take-off, suivi de trajectoire et recadrage cinématique fluide de sessions de surf.**
@@ -12,9 +13,36 @@
 <div align="center">
   <h3>🎯 Détection & Segmentation d'Instance en Milieu Réel (iPhone 9:16)</h3>
   <img src="./assets/surf_vision_ai_real_demo.gif" width="360" alt="Détection IA et Segmentation de Surf sur Vidéo Réelle">
-  <p><em>Session réelle à Huntington Beach, CA (c'est moi 😎😎 — surfeur : 6'1" / 1,85 m, planche : 5'8" / 1,73 m) :<br>
-  masques polygonaux surfeur & planche (YOLOv8-Seg) • classification de posture (Paddling ➔ Take-Off ➔ Riding) • télémétrie métrique en direct.</em></p>
+  <p><em>Session réelle à Huntington Beach, CA (c'est moi 😎😎 — surfeur : 185 cm [6'1"], planche : 5'8" [1,73 m]) :<br>
+  masques polygonaux surfeur & planche (YOLOv8-Seg) • classification de posture (Paddling ➔ Take-Off ➔ Riding) • télémétrie métrique en direct (km/h & vagues en m/ft).</em></p>
 </div>
+
+---
+
+## ⚡ Démarrage 1-Clic Ultra-Simple
+
+### Option A : En Ligne sur Internet (0 Installation)
+Tu peux déployer ou tester directement l'application sur **Streamlit Community Cloud** en connectant ce repo GitHub en 1 clic. L'interface Web se lance sans aucun téléchargement requis.
+
+### Option B : Sur ton Ordinateur en 1 Seul Double-Clic
+Télécharge le projet (via `git clone` ou le bouton vert **Code ➔ Download ZIP**) et lance l'app immédiatement :
+
+- **🍏 macOS :** Double-cliquez simplement sur **`launch_app.command`** dans le Finder.  
+  *(Crée l'environnement virtuel, installe les dépendances et ouvre l'application dans votre navigateur automatiquement).*
+- **🪟 Windows :** Double-cliquez sur **`launch_app.bat`**.
+- **🐧 Linux / Terminal :** Exécutez `./start.sh`.
+
+---
+
+## ⚙️ Configuration & Unités Universelles
+
+Tous les paramètres de base sont centralisés dans **[`config.yaml`](./config.yaml)** avec des valeurs par défaut élégamment calibrées. Vous pouvez les modifier directement dans le fichier ou via le bouton **💾 Sauvegarder** du volet latéral de l'application Web :
+
+- **Surfeur (favorisé en centimètres) :** `185 cm` *(avec équivalent international 6'1")*.
+- **Planche de surf (favorisé en pieds & pouces) :** `5'8"` *(avec équivalent métrique 1,73 m)*.
+- **Taille de vague (double affichage simultané) :** exprimée en mètres ET en pieds *(ex: `1.65 m (5.4 ft) [Head High]`)*.
+- **Vitesse maximale :** calculée en **`km/h`** pour chaque vague surfée avec affichage sur le badge flottant.
+- **Cadrage PTZ :** ratio par défaut `9:16` (format vertical Instagram Reels / TikTok), zoom `4.0x`, lead-room `0.35`, amorti cinématique `0.10`.
 
 ---
 
@@ -132,14 +160,16 @@ Interface moderne pour déposer vos vidéos, ajuster interactivement le zoom, la
 
 ### Ligne de Commande (CLI Batch)
 ```bash
-# Export cinématique 16:9 (YouTube)
-python3 track_surf.py --input ma_session.mp4 --aspect 16:9 --output-dir outputs/
+# Utilise automatiquement tous les réglages par défaut de config.yaml :
+python3 track_surf.py --input ma_session.mp4
 
-# Export vertical 9:16 (Instagram Reels / TikTok) + Vidéo Double Écran (Side-by-Side 1080p)
-python3 track_surf.py --input ma_session.mp4 --aspect 9:16 --lead-room 0.35 --zoom-scale 4.0
-
-# Tester directement sur la séquence iPhone réelle (surfeur 6'1" / 1.85 m, planche 5'8" / 1.73 m calibrés) :
-python3 track_surf.py --input data/user_surf_iphone.mov --aspect 9:16 --surfer-height 1.85 --board-length 1.73
+# Personnalisation rapide (taille en cm, planche en ft/in, ratio 9:16) :
+python3 track_surf.py --input data/user_surf_iphone.mov \
+  --aspect 9:16 \
+  --surfer-height-cm 185 \
+  --board-length-ft-in "5'8\"" \
+  --lead-room 0.35 \
+  --output-dir outputs/
 ```
 
 ---
@@ -149,7 +179,7 @@ python3 track_surf.py --input data/user_surf_iphone.mov --aspect 9:16 --surfer-h
 ```bash
 pytest tests/ -v
 ```
-Vérifie le respect des bordures (zéro bande noire), la transition de la machine à états et les équations de cadrage cinématique.
+Vérifie le respect des bordures (zéro bande noire), la transition de la machine à états, les équations de cadrage cinématique, la conversion d'unités et le chargement de `config.yaml` (20 tests validés).
 
 ---
 
@@ -157,10 +187,17 @@ Vérifie le respect des bordures (zéro bande noire), la transition de la machin
 
 ```
 surf-camera-vision/
-├── app.py                     # Application Web Streamlit
+├── launch_app.command         # 🍏 Lanceur 1-clic macOS (double-clic Finder)
+├── launch_app.bat             # 🪟 Lanceur 1-clic Windows (double-clic)
+├── start.sh                   # 🐧 Lanceur terminal Linux / macOS
+├── config.yaml                # ⚙️ Configuration centralisée & valeurs par défaut
+├── app.py                     # Studio Web Streamlit v0.2.1
+├── track_surf.py              # CLI batch avec support cm & ft/in
 ├── demo.py                    # Démo 1-clic autonome
-├── track_surf.py              # CLI batch
+├── packages.txt               # Dépendances système Streamlit Cloud (ffmpeg, libgl1)
+├── requirements.txt           # Dépendances Python
 ├── surf_camera/
+│   ├── config.py              # Gestionnaire config.yaml & conversion d'unités
 │   ├── detector.py            # YOLOv8 (surfeur & planche)
 │   ├── tracker.py             # Spatio-temporal tracker & vitesse
 │   ├── state_machine.py       # Classification Rame -> Take-Off -> Surf
@@ -168,8 +205,8 @@ surf-camera-vision/
 │   ├── scale_estimator.py     # JointScaleVAE & calibration métrique conjointe
 │   ├── wave_analyzer.py       # Segmentation de la masse d'eau & hauteur crête/creux
 │   ├── pipeline.py            # Moteur d'assemblage & encodage H.264
-│   └── utils.py               # Badge minimaliste & HUD télémétrique
-└── tests/                     # Suite de tests automatisés pytest
+│   └── utils.py               # Badge minimaliste (KM/H, M/FT) & HUD télémétrique
+└── tests/                     # Suite de tests automatisés pytest (20 tests)
 ```
 
 ---
