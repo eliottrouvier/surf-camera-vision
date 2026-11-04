@@ -26,5 +26,6 @@ else
     fi
 fi
 
-echo "🚀 Lancement du Studio Web Streamlit..."
-exec "$PYTHON_BIN" -m streamlit run app.py --server.headless=true --browser.gatherUsageStats=false
+echo "🚀 Démarrage instantané du Studio Web Streamlit..."
+(sleep 1.2 && (open "http://localhost:8501" 2>/dev/null || xdg-open "http://localhost:8501" 2>/dev/null)) &
+exec "$PYTHON_BIN" -m streamlit run app.py

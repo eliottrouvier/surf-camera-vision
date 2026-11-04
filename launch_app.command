@@ -41,8 +41,11 @@ else
 fi
 
 echo "🚀 Démarrage instantané du Studio Web Streamlit..."
-echo "👉 L'application va s'ouvrir automatiquement dans votre navigateur par défaut."
+echo "👉 Ouverture automatique de votre navigateur sur http://localhost:8501..."
 echo "   (Appuyez sur Ctrl+C dans cette fenêtre pour arrêter l'application)."
 echo ""
 
-exec "$PYTHON_BIN" -m streamlit run app.py --server.headless=true --browser.gatherUsageStats=false
+# Ouverture automatique garantie du navigateur Safari / Chrome par défaut sur macOS
+(sleep 1.2 && open "http://localhost:8501") &
+
+exec "$PYTHON_BIN" -m streamlit run app.py
