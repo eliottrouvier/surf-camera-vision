@@ -182,7 +182,12 @@ class SurferTracker:
         new_center = det.center
         dt = max(1, frame_idx - track.last_frame)
         vx = (new_center[0] - old_center[0]) / dt
-        vy = (new_center[1] - old_center[1]) / dt
+
+        # Vertical velocity: track bottom baseline (feet/board contact on water surface)
+        # to prevent artificial speed spikes when the surfer stands upright during pop-up
+        old_base_y = track.bbox[3]
+        new_base_y = det.bbox[3]
+        vy = (new_base_y - old_base_y) / dt
 
         track.bbox = det.bbox
         track.confidence = det.confidence

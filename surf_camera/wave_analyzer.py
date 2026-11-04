@@ -130,20 +130,33 @@ class WaveSegmentationEngine:
         surfer_base_roi_y = float(sy2 - y_top)
         trough_roi_y = surfer_base_roi_y
 
-        # Scan for crest above surfer feet (from surfer_base upwards)
-        # Plausible wave lip range: from 0.4x to 1.8x surfer height above board
-        min_crest_y = max(0.0, surfer_base_roi_y - s_h * self.max_wave_height_ratio)
-        max_crest_y = max(0.0, surfer_base_roi_y - s_h * 0.35)
+        # Upward connected search starting from the surfer's feet baseline
+        # Follow the active wave contrast cluster upwards to locate the real crest / lip,
+        # without jumping across empty ocean to grab distant horizon lines or sky artifacts.
+        crest_roi_y = surfer_base_roi_y
+        max_search_dist_px = int(s_h * self.max_wave_height_ratio)
+        max_gap_px = 3
+        consecutive_gap = 0
+        found_any = False
 
-        candidate_rows = active_rows[(active_rows >= min_crest_y) & (active_rows <= max_crest_y)] if len(active_rows) > 0 else []
+        base_int = int(np.clip(surfer_base_roi_y, 0, len(row_sums) - 1))
+        min_limit_y = max(0, int(surfer_base_roi_y - max_search_dist_px))
 
-        if len(candidate_rows) > 0:
-            # Crest is the top-most active row in this candidate zone
-            crest_roi_y = float(candidate_rows[0])
-            wave_h_px = trough_roi_y - crest_roi_y
-        else:
-            # Fallback to standard wave face (~1.10x surfer standing height)
-            wave_h_px = s_h * 1.10
+        for r in range(base_int, min_limit_y - 1, -1):
+            if row_sums[r] >= max(3, int(band_w * 0.32)):
+                crest_roi_y = float(r)
+                consecutive_gap = 0
+                found_any = True
+            else:
+                consecutive_gap += 1
+                if found_any and consecutive_gap > max_gap_px:
+                    # Crest reached (transition from dense wave face to open air/sky)
+                    break
+
+        wave_h_px = trough_roi_y - crest_roi_y
+        if not found_any or wave_h_px < (s_h * 0.25):
+            # Fallback to realistic standard wave face (~0.65x surfer height)
+            wave_h_px = s_h * 0.65
             crest_roi_y = max(0.0, trough_roi_y - wave_h_px)
 
         abs_crest_y = float(y_top + crest_roi_y)

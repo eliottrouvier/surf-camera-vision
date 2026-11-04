@@ -10,6 +10,7 @@ from surf_camera.maneuver_classifier import (
     ManeuverClassifier,
     ManeuverType,
     ManeuverDetection,
+    compute_wsl_score,
 )
 from surf_camera.wave_analyzer import WaveMetrics
 from surf_camera.utils import draw_neon_skeleton, draw_biomechanical_lab
@@ -218,3 +219,54 @@ def test_draw_biomechanical_lab():
     )
     assert lab_pane.shape == (1040, 920, 3)
     assert np.any(lab_pane > 13)
+
+
+def test_compute_wsl_score_poor_neutral_glide():
+    # A surfer surfing straight with stiff legs (> 150 deg) on a 1.0m wave
+    score, cat, desc = compute_wsl_score(
+        maneuvers_detected=[],
+        duration_sec=7.0,
+        peak_speed_kmh=11.0,
+        wave_height_m=1.0,
+        mean_knee_angle_deg=171.0,
+    )
+    # WSL Poor range is strictly [0.0, 1.9]
+    assert 0.4 <= score <= 1.5
+    assert "Poor" in cat
+    assert "posture" in desc or "Glisse" in desc
+
+
+def test_compute_wsl_score_committed_combo():
+    # A surfer linking a bottom turn and a snap
+    bt = ManeuverDetection(
+        maneuver_type=ManeuverType.BOTTOM_TURN,
+        name="🔥 Bottom Turn",
+        confidence=0.9,
+        score_out_of_10=7.5,
+        g_force=2.2,
+        knee_flexion_deg=105.0,
+        torso_lean_deg=32.0,
+        description="Bottom turn",
+        is_active=True,
+    )
+    snap = ManeuverDetection(
+        maneuver_type=ManeuverType.ROLLER,
+        name="⚡ Roller / Snap",
+        confidence=0.88,
+        score_out_of_10=8.0,
+        g_force=2.5,
+        knee_flexion_deg=112.0,
+        torso_lean_deg=-26.0,
+        description="Snap",
+        is_active=True,
+    )
+    score, cat, desc = compute_wsl_score(
+        maneuvers_detected=[bt, snap],
+        duration_sec=8.5,
+        peak_speed_kmh=24.5,
+        wave_height_m=1.8,
+        mean_knee_angle_deg=115.0,
+    )
+    assert score >= 6.5
+    assert ("Very Good" in cat or "Good" in cat or "Excellent" in cat)
+

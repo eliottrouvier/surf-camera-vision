@@ -6,7 +6,7 @@ invariance against crouching, carving, and wave foam occlusions.
 """
 
 from dataclasses import dataclass
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple, List, Any
 import numpy as np
 import torch
 import torch.nn as nn
@@ -122,9 +122,11 @@ class MetricScaleEstimator:
         board_bbox: Optional[Tuple[float, float, float, float]] = None,
         board_mask: Optional[np.ndarray] = None,
         is_standing_hint: bool = False,
+        pose: Optional[Any] = None,
     ) -> ScaleEstimate:
         """
         Updates and returns the calibrated metric scale for the current frame.
+        Guarantees invariant scaling across crouching and prevents uncalibrated paddle distortion.
         """
         sx1, sy1, sx2, sy2 = surfer_bbox
         s_w = max(1.0, sx2 - sx1)
@@ -149,10 +151,24 @@ class MetricScaleEstimator:
             b_len = s_h * 1.05
             b_width = s_w * 0.35
 
+        # Is the surfer in an upright posture? (aspect < 0.85 and standing hint)
+        is_upright = (s_aspect < 0.85) or is_standing_hint
+
+        # GUARD: If surfer is still paddling / prone in water (tiny box or not standing),
+        # DO NOT pollute the scale history with an uncalibrated 15-20px prone box!
+        if not is_standing_hint and s_h < 35.0:
+            fallback = self.current_m_per_px or 0.022
+            return ScaleEstimate(
+                meters_per_pixel=float(fallback),
+                confidence=0.30,
+                surfer_height_px=float(s_h),
+                board_length_px=float(b_len),
+                is_upright=False,
+            )
+
         b_aspect = b_width / max(1.0, b_len)
 
         # Prepare normalized observation vector for VAE
-        # Baseline reference: normalized around nominal 100px surfer height
         ref_norm = 100.0 / s_h
         feat = np.array([
             s_w * ref_norm,
@@ -169,23 +185,44 @@ class MetricScaleEstimator:
             mu, logvar = self.vae.encode(feat_tensor)
             _, pred_logits = self.vae.scale_head(mu).squeeze(0).cpu().numpy()
 
-        # Is the surfer in an upright posture? (aspect < 0.85 and standing hint)
-        is_upright = (s_aspect < 0.85) or is_standing_hint
         confidence = 0.5
 
         # Bayesian fusion of measurements:
         candidates = []
         weights = []
 
-        # Measurement 1: Surfer height (highest confidence when upright)
-        if is_upright and s_h > 15.0:
-            scale_surfer = self.nominal_surfer_height_m / s_h
+        # Measurement 0: Full Anatomical Skeleton Length (Pose invariant to crouching)
+        if pose is not None and hasattr(pose, "keypoints") and getattr(pose, "confidence", 0.0) > 0.40:
+            kpts = pose.keypoints
+            if kpts.shape[0] >= 17:
+                mid_sh = (kpts[5, :2] + kpts[6, :2]) / 2.0
+                mid_hip = (kpts[11, :2] + kpts[12, :2]) / 2.0
+                l_knee, r_knee = kpts[13, :2], kpts[14, :2]
+                l_ank, r_ank = kpts[15, :2], kpts[16, :2]
+
+                torso = float(np.linalg.norm(mid_sh - mid_hip))
+                legs = float(
+                    np.linalg.norm(kpts[11, :2] - l_knee) + np.linalg.norm(l_knee - l_ank) +
+                    np.linalg.norm(kpts[12, :2] - r_knee) + np.linalg.norm(r_knee - r_ank)
+                ) / 2.0
+                total_skeleton = torso * 1.35 + legs
+                if total_skeleton > 25.0:
+                    scale_skel = self.nominal_surfer_height_m / total_skeleton
+                    candidates.append(scale_skel)
+                    weights.append(0.85)
+                    confidence = max(confidence, 0.90)
+
+        # Measurement 1: Surfer height (effective when upright and sufficiently tall)
+        if is_upright and s_h > 25.0:
+            # Stance height accounts for natural riding knee bend (~85% of standing height)
+            effective_height_m = self.nominal_surfer_height_m * 0.88
+            scale_surfer = effective_height_m / s_h
             candidates.append(scale_surfer)
             weights.append(0.70)
             confidence = max(confidence, 0.85)
 
-        # Measurement 2: Board length (invariant to crouching posture)
-        if b_len > 15.0:
+        # Measurement 2: Board length (rigid reference)
+        if b_len > 25.0:
             scale_board = self.nominal_board_length_m / b_len
             candidates.append(scale_board)
             weights.append(0.30 if is_upright else 0.80)
@@ -195,13 +232,15 @@ class MetricScaleEstimator:
             weights = np.array(weights) / sum(weights)
             measured_scale = float(np.sum(np.array(candidates) * weights))
         else:
-            measured_scale = self.current_m_per_px or (self.nominal_surfer_height_m / max(20.0, s_h))
+            measured_scale = self.current_m_per_px or 0.022
+
+        # Physically plausible clamp [0.010, 0.045] (1.0 cm to 4.5 cm per pixel)
+        measured_scale = float(np.clip(measured_scale, 0.010, 0.045))
 
         # Temporal Exponential Moving Average (EMA) smoothing
         if self.current_m_per_px is None:
             self.current_m_per_px = measured_scale
         else:
-            # Adapt smoothing factor based on upright confidence
             alpha = self.ema_alpha if is_upright else self.ema_alpha * 0.4
             self.current_m_per_px = alpha * measured_scale + (1.0 - alpha) * self.current_m_per_px
 

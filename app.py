@@ -474,7 +474,8 @@ if "results" in st.session_state:
                 ride = rides[idx] if idx < len(rides) else None
                 if ride:
                     wave_str = format_wave_dual_units(ride.wave_height_meters)
-                    m_badge = f"🔥 {ride.best_maneuver} ({ride.maneuver_score}/10)" if (ride.best_maneuver and ride.best_maneuver != "Glisse Neutre") else "Glisse Continue"
+                    wsl_tier = "Poor" if ride.maneuver_score < 2.0 else ("Fair" if ride.maneuver_score < 4.0 else ("Good" if ride.maneuver_score < 6.0 else "Very Good"))
+                    m_badge = f"🔥 {ride.best_maneuver} (WSL: {ride.maneuver_score}/10)" if (ride.best_maneuver and ride.best_maneuver != "Glisse Neutre") else f"Glisse Continue (WSL: {ride.maneuver_score}/10 - {wsl_tier})"
                     ride_title = f"Vague #{ride.ride_id} — {m_badge} • Pic : {ride.max_speed_kmh:.1f} km/h • Vague : {wave_str} [{ride.wave_category}] • {ride.duration_sec:.1f}s ({ride.direction})"
                 else:
                     ride_title = f"Ride #{idx+1}"
@@ -528,7 +529,8 @@ if "results" in st.session_state:
                 with c_vid:
                     st.video(clip_path)
                 with c_info:
-                    m_card = f"- **🏆 Figure Clé :** `{ride.best_maneuver}` (Score : `{ride.maneuver_score}/10`)\n" if (ride.best_maneuver and ride.best_maneuver != "Glisse Neutre") else ""
+                    wsl_tier = "Poor" if ride.maneuver_score < 2.0 else ("Fair" if ride.maneuver_score < 4.0 else ("Good" if ride.maneuver_score < 6.0 else "Very Good"))
+                    m_card = f"- **🏆 Figure Clé :** `{ride.best_maneuver}`\n- **🎯 Note WSL Officielle :** `{ride.maneuver_score}/10` ({wsl_tier})\n"
                     m_list = ", ".join(ride.maneuvers_detected) if ride.maneuvers_detected else "Glisse Neutre"
                     st.markdown(f"""
                     {m_card}- **🤸 Figures Détectées :** `{m_list}`

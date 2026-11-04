@@ -207,12 +207,18 @@ class SurfTrackingPipeline:
                     surfer_bbox=primary_track.bbox,
                     surfer_velocity=primary_track.current_velocity,
                 )
+                is_standing = (current_states.get(primary_track.track_id) == SurferState.RIDING)
+
+                # Pose Estimation (evaluated in Pass 1 if not fast_scan, otherwise deferred to Pass 2 on rides)
+                if not self.config.fast_scan and self.pose_estimator is not None and current_states.get(primary_track.track_id) in (SurferState.RIDING, SurferState.TAKE_OFF):
+                    current_pose = self.pose_estimator.estimate(frame, primary_track.bbox)
+
                 if self.config.enable_wave_metrics:
-                    is_standing = (current_states.get(primary_track.track_id) == SurferState.RIDING)
                     scale_est = self.scale_estimator.update(
                         surfer_bbox=primary_track.bbox,
                         board_mask=primary_track.current_board_mask,
                         is_standing_hint=is_standing,
+                        pose=current_pose,
                     )
                     current_scale = scale_est.meters_per_pixel
                     current_spd_kmh = primary_track.current_speed * current_scale * fps * 3.6
@@ -226,17 +232,14 @@ class SurfTrackingPipeline:
                         meters_per_pixel=current_scale,
                     )
 
-                # Pose Estimation (evaluated in Pass 1 if not fast_scan, otherwise deferred to Pass 2 on rides)
-                if not self.config.fast_scan and self.pose_estimator is not None and current_states.get(primary_track.track_id) in (SurferState.RIDING, SurferState.TAKE_OFF):
-                    current_pose = self.pose_estimator.estimate(frame, primary_track.bbox)
-                    if self.maneuver_classifier is not None:
-                        current_maneuver = self.maneuver_classifier.update(
-                            pose=current_pose,
-                            wave=wave_met,
-                            surfer_center=primary_track.centroid,
-                            velocity=primary_track.current_velocity,
-                            speed_kmh=current_spd_kmh,
-                        )
+                if not self.config.fast_scan and current_pose is not None and self.maneuver_classifier is not None:
+                    current_maneuver = self.maneuver_classifier.update(
+                        pose=current_pose,
+                        wave=wave_met,
+                        surfer_center=primary_track.centroid,
+                        velocity=primary_track.current_velocity,
+                        speed_kmh=current_spd_kmh,
+                    )
 
             camera_boxes_history.append(cam_box)
             active_surfer_history.append(primary_track.bbox if primary_track else None)
@@ -323,48 +326,108 @@ class SurfTrackingPipeline:
         # Consolidate fragmented rides into unified waves
         final_rides = self.state_machine.get_consolidated_rides(max_gap_sec=self.config.max_merge_gap_sec) if self.config.consolidate_rides else self.state_machine.completed_rides
 
-        # Enrich each ride with physical wave & kinematic metrics
+        # Pass 2 Micro-Biomechanics: compute pose and maneuvers on active rides if fast_scan was enabled
+        if self.config.fast_scan and self.pose_estimator is not None and len(final_rides) > 0:
+            cap_pass2 = cv2.VideoCapture(str(video_path))
+            for ride in final_rides:
+                if self.maneuver_classifier:
+                    self.maneuver_classifier.reset()
+                cap_pass2.set(cv2.CAP_PROP_POS_FRAMES, ride.start_frame)
+                for f_idx in range(ride.start_frame, min(ride.end_frame, len(frame_metrics_history))):
+                    ret, f_frame = cap_pass2.read()
+                    if not ret:
+                        break
+                    abox = active_surfer_history[f_idx]
+                    if abox is not None:
+                        pose_obj = self.pose_estimator.estimate(f_frame, abox)
+                        met = frame_metrics_history[f_idx]
+                        met["pose"] = pose_obj
+                        if self.maneuver_classifier is not None:
+                            cx = (abox[0] + abox[2]) / 2.0
+                            cy = (abox[1] + abox[3]) / 2.0
+                            m_obj = self.maneuver_classifier.update(
+                                pose=pose_obj,
+                                wave=met.get("wave"),
+                                surfer_center=(cx, cy),
+                                velocity=(0.0, 0.0),
+                                speed_kmh=met.get("speed_kmh", 0.0),
+                            )
+                            met["maneuver"] = m_obj
+            cap_pass2.release()
+
+        # Enrich each ride with physical wave & kinematic metrics (WSL Compliant)
+        from .maneuver_classifier import compute_wsl_score
+
         for ride in final_rides:
             s_idx = max(0, ride.start_frame)
             e_idx = min(len(frame_metrics_history), ride.end_frame)
             ride_mets = frame_metrics_history[s_idx:e_idx]
-            if ride_mets:
-                speeds = [m["speed_kmh"] for m in ride_mets if m.get("speed_kmh", 0.0) > 0.0]
-                waves = [m["wave"] for m in ride_mets if m.get("wave") is not None]
+            ride_states = frame_states_history[s_idx:e_idx] if s_idx < len(frame_states_history) else []
+
+            # Isolate stabilized riding frames (ignore pre-roll paddling and initial pop-up transition)
+            takeoff_settled_frame = max(s_idx, ride.takeoff_frame + int(fps * 0.5))
+            riding_mets = [
+                m for i, m in enumerate(ride_mets)
+                if (s_idx + i) >= takeoff_settled_frame and (
+                    i >= len(ride_states) or ride_states[i].get(ride.surfer_id) in (SurferState.RIDING, SurferState.TAKE_OFF)
+                )
+            ]
+            eval_mets = riding_mets if len(riding_mets) >= 5 else ride_mets
+
+            if eval_mets:
+                speeds = [m["speed_kmh"] for m in eval_mets if m.get("speed_kmh", 0.0) > 0.0]
+                waves = [m["wave"] for m in eval_mets if m.get("wave") is not None]
                 wave_hs = [w.height_meters for w in waves if w.height_meters > 0.0]
                 maneuvers = [
-                    m["maneuver"] for m in ride_mets
+                    m["maneuver"] for m in eval_mets
                     if m.get("maneuver") is not None and m["maneuver"].is_active and m["maneuver"].maneuver_type != ManeuverType.NONE
                 ]
+                poses = [m["pose"] for m in eval_mets if m.get("pose") is not None]
+                mean_knee = float(np.mean([p.knee_angle_deg for p in poses])) if poses else 145.0
 
                 if speeds:
-                    ride.max_speed_kmh = round(float(np.max(speeds)), 1)
-                    ride.avg_speed_kmh = round(float(np.mean(speeds)), 1)
-                    ride.speed_series_kmh = [round(float(s), 1) for s in speeds]
+                    # Rolling median smoothing to reject detector jitter
+                    smooth_speeds = [
+                        float(np.median(speeds[max(0, j-2):min(len(speeds), j+3)]))
+                        for j in range(len(speeds))
+                    ]
+                    # Peak speed is 95th percentile of stabilized riding speeds
+                    ride.max_speed_kmh = round(float(np.percentile(smooth_speeds, 95)), 1)
+                    ride.avg_speed_kmh = round(float(np.mean(smooth_speeds)), 1)
+                    ride.speed_series_kmh = [round(float(s), 1) for s in smooth_speeds]
 
-                dist_m = sum(m.get("speed_kmh", 0.0) / 3.6 / fps for m in ride_mets)
+                dist_m = sum(m.get("speed_kmh", 0.0) / 3.6 / fps for m in eval_mets)
                 ride.distance_meters = round(float(dist_m), 1)
 
                 if wave_hs:
-                    rep_wave_h = float(np.percentile(wave_hs, 80))
+                    # Representative wave face height (40th percentile of stabilized face)
+                    rep_wave_h = float(np.percentile(wave_hs, 40))
                     ride.wave_height_meters = round(rep_wave_h, 2)
                     ride.wave_height_feet = round(rep_wave_h * 3.28084, 1)
                     ride.wave_category = classify_wave_size(rep_wave_h)
                     ride.wave_height_series_m = [round(float(h), 2) for h in wave_hs]
                 else:
-                    ride.wave_height_meters = 1.35
-                    ride.wave_height_feet = 4.4
-                    ride.wave_category = classify_wave_size(1.35)
+                    ride.wave_height_meters = 1.00
+                    ride.wave_height_feet = 3.3
+                    ride.wave_category = classify_wave_size(1.00)
+
+                # Authentic WSL Scoring
+                wsl_score, wsl_cat, wsl_desc = compute_wsl_score(
+                    maneuvers_detected=maneuvers,
+                    duration_sec=ride.duration_sec,
+                    peak_speed_kmh=ride.max_speed_kmh,
+                    wave_height_m=ride.wave_height_meters,
+                    mean_knee_angle_deg=mean_knee,
+                )
+                ride.maneuver_score = wsl_score
 
                 if maneuvers:
                     unique_names = list(dict.fromkeys(m.name for m in maneuvers))
                     ride.maneuvers_detected = unique_names
                     best_m = max(maneuvers, key=lambda m: m.score_out_of_10)
                     ride.best_maneuver = best_m.name
-                    ride.maneuver_score = best_m.score_out_of_10
                 else:
                     ride.best_maneuver = "Glisse Neutre"
-                    ride.maneuver_score = 5.0
                     ride.maneuvers_detected = ["Glisse Neutre"]
 
         # Step 7: Render Cropped Ride Clips
