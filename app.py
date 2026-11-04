@@ -121,6 +121,34 @@ st.markdown("""
 # --- LOAD CURRENT PERSISTENT CONFIGURATION ---
 current_cfg = load_config()
 
+# --- MODEL & PIPELINE CACHING (APPLE SILICON GPU) ---
+@st.cache_resource(show_spinner="⚡ Chargement accéléré des modèles en mémoire vive...")
+def get_cached_pipeline(
+    model_name: str,
+    pose_model_name: str,
+    enable_pose: bool,
+    split_mode: str,
+    aspect_ratio: str,
+    surfer_height_m: float,
+    board_length_m: float,
+    fast_scan: bool = True,
+) -> SurfTrackingPipeline:
+    """Loads and retains pre-trained YOLO & Pose models in unified memory (zero reload latency)."""
+    cfg = PipelineConfig(
+        model_name=model_name,
+        pose_model_name=pose_model_name,
+        conf_threshold=0.20,
+        aspect_ratio=aspect_ratio,
+        surfer_height_m=surfer_height_m,
+        board_length_m=board_length_m,
+        enable_pose_estimation=enable_pose,
+        split_mode=split_mode,
+        fast_scan=fast_scan,
+        save_split_screen=True,
+    )
+    return SurfTrackingPipeline(cfg)
+
+
 # --- HEADER ---
 st.markdown("""
 <div class="brand-container">
@@ -130,8 +158,8 @@ st.markdown("""
 <div class="brand-subtitle">Cameraman virtuel intelligent (Digital PTZ), analyse biomécanique 17 keypoints & classification des figures</div>
 """, unsafe_allow_html=True)
 
-# --- SIDEBAR CONFIGURATION ---
-st.sidebar.markdown("### ⚙️ Paramètres Studio")
+# --- SIDEBAR CONFIGURATION (ORGANISÉ & REPLIÉ) ---
+st.sidebar.markdown("### ⚙️ Profil & Paramètres Avancés")
 
 # 1. Preset Selector
 preset_names = ["Personnalisé / Actuel"] + list(PRESETS.keys())
@@ -146,6 +174,7 @@ if selected_preset != "Personnalisé / Actuel":
     def_zoom = p_data.get("zoom_scale", 4.0)
     def_lead = p_data.get("lead_room_factor", 0.35)
     def_smooth = p_data.get("smoothing_factor", 0.10)
+    def_split = current_cfg.get("cameraman", {}).get("split_mode", "biomechanical")
 else:
     def_surfer_cm = current_cfg["surfer"].get("height_cm", 185.0)
     def_board_str = current_cfg["surfboard"].get("length_ft_in", "5'8\"")
@@ -153,21 +182,20 @@ else:
     def_zoom = current_cfg["cameraman"].get("zoom_scale", 4.0)
     def_lead = current_cfg["cameraman"].get("lead_room_factor", 0.35)
     def_smooth = current_cfg["cameraman"].get("smoothing_factor", 0.10)
+    def_split = current_cfg.get("cameraman", {}).get("split_mode", "biomechanical")
 
-with st.sidebar.expander("🌊 Paramètres Vagues & Dimensions Métriques", expanded=True):
-    # Surfer height favored in CENTIMETERS
+with st.sidebar.expander("🌊 Dimensions Surfeur & Planche", expanded=False):
     surfer_height_cm = st.slider(
         "Taille du surfeur (cm)",
         min_value=145,
         max_value=210,
         value=int(round(def_surfer_cm)),
         step=1,
-        help="Favorisé en cm. Utilisé par le VAE pour calibrer les mètres par pixel (ex: 185 cm = 6'1\")."
+        help="Utilisé par le VAE pour calibrer l'échelle métrique réelle (ex: 185 cm = 6'1\")."
     )
     surfer_height_m = cm_to_meters(surfer_height_cm)
     st.caption(f"📏 Équivalent : **{format_surfer_height(surfer_height_cm)}**")
 
-    # Surfboard length favored in FEET & INCHES
     BOARD_SIZES = [
         "5'4\"", "5'6\"", "5'8\"", "5'10\"", "6'0\"", "6'2\"",
         "6'4\"", "6'6\"", "6'8\"", "7'0\"", "7'2\"", "7'6\"",
@@ -178,22 +206,14 @@ with st.sidebar.expander("🌊 Paramètres Vagues & Dimensions Métriques", expa
         "Taille de planche (ft / in)",
         options=BOARD_SIZES,
         index=board_idx,
-        help="Favorisé en pieds & pouces (standard mondial du surf, ex: 5'8\" = 1.73 m)."
+        help="Longueur de planche (standard mondial du surf, ex: 5'8\" = 1.73 m)."
     )
     board_length_m = parse_ft_in(board_choice)
     st.caption(f"🏄 Longueur réelle : **{board_length_m:.2f} m** ({board_choice})")
 
     enable_wave_metrics = st.toggle("Activer télémétrie & segmentation de vague", value=True)
 
-with st.sidebar.expander("🎥 Cadrage & Composition PTZ", expanded=True):
-    aspect_options = ["9:16", "16:9", "1:1"]
-    aspect_idx = aspect_options.index(def_aspect) if def_aspect in aspect_options else 0
-    aspect_option = st.selectbox(
-        "Format de cadrage",
-        options=aspect_options,
-        index=aspect_idx,
-        help="9:16 (Instagram Reels / TikTok) | 16:9 (YouTube) | 1:1 (Carré)"
-    )
+with st.sidebar.expander("🎥 Cadrage Virtuel PTZ", expanded=False):
     zoom_scale = st.slider(
         "Facteur de zoom virtuel",
         min_value=2.0,
@@ -218,32 +238,16 @@ with st.sidebar.expander("🎥 Cadrage & Composition PTZ", expanded=True):
         step=0.01,
         help="Inertie de la rotule fluide. Valeur basse = suivi ultra-doux sans tremblement."
     )
-    enable_split_screen = st.toggle("Générer la vidéo Double Écran (Side-by-Side 1080p)", value=True)
-    if enable_split_screen:
-        split_mode_options = [
-            "🔬 Laboratoire Biomécanique (Avatar 3D + Vidéo Réelle)",
-            "📺 Plan Large Fixe (Plage) vs Digital PTZ",
-        ]
-        def_split = current_cfg.get("cameraman", {}).get("split_mode", "biomechanical")
-        def_split_idx = 0 if def_split == "biomechanical" else 1
-        split_mode_choice = st.selectbox(
-            "Mode Double Écran",
-            options=split_mode_options,
-            index=def_split_idx,
-            help="Choisis entre le studio biomécanique cinématique et la vue large comparative."
-        )
-        split_mode = "biomechanical" if "Biomécanique" in split_mode_choice else "wide_ptz"
-    else:
-        split_mode = "biomechanical"
 
-with st.sidebar.expander("🎯 Détection & IA", expanded=False):
+with st.sidebar.expander("🎯 Détection IA & Pose", expanded=False):
     model_options = [
+        "weights/yolov8n_surf_v2_best.pt (Modèle Spécialisé Surf v2)",
         "yolov8n-seg.pt (Instance Segmentation COCO)",
         "yolov8n.pt (Boîtes seules)",
     ]
     ft_weights = Path("weights/yolov8n_surf_v2_best.pt")
-    if ft_weights.exists():
-        model_options.insert(0, f"{ft_weights.name} (Modèle Spécialisé Surf v2)")
+    if not ft_weights.exists():
+        model_options.pop(0)
 
     model_choice = st.selectbox("Modèle YOLO Détection", options=model_options, index=0)
     model_name = "weights/yolov8n_surf_v2_best.pt" if "Surf v2" in model_choice else ("yolov8n-seg.pt" if "seg" in model_choice else "yolov8n.pt")
@@ -274,12 +278,12 @@ with col_save:
                 "length_m": float(board_length_m),
             },
             "cameraman": {
-                "aspect_ratio": aspect_option,
+                "aspect_ratio": def_aspect,
                 "zoom_scale": float(zoom_scale),
                 "smoothing_factor": float(smoothing),
                 "lead_room_factor": float(lead_room),
-                "enable_split_screen": enable_split_screen,
-                "split_mode": split_mode,
+                "enable_split_screen": True,
+                "split_mode": def_split,
             },
             "detection": {
                 "model_name": model_name,
@@ -311,14 +315,35 @@ with col_reset:
         st.sidebar.info("Paramètres par défaut restaurés. Rafraîchis la page.")
 
 
+# --- STEP 1: PARAMÈTRES RAPIDES EN 1 CLIC ---
+col_fmt, col_mode = st.columns(2)
+with col_fmt:
+    aspect_choice = st.radio(
+        "📱 Format Vidéo de Sortie",
+        ["9:16 (Instagram Reels / TikTok)", "16:9 (YouTube / Écran Large)"],
+        index=0 if def_aspect == "9:16" else 1,
+        horizontal=True,
+    )
+    aspect_option = "9:16" if "9:16" in aspect_choice else "16:9"
+
+with col_mode:
+    split_choice = st.radio(
+        "🔬 Mode de Visualisation",
+        ["Laboratoire Biomécanique (Avatar 3D)", "Plan Large Fixe vs PTZ", "Clip Recadré Seul"],
+        index=0 if def_split == "biomechanical" else 1,
+        horizontal=True,
+    )
+    enable_split_screen = ("Clip Recadré Seul" not in split_choice)
+    split_mode = "biomechanical" if "Biomécanique" in split_choice else "wide_ptz"
+
 # --- WORKSPACE DIRECTORIES ---
 data_dir = Path("data")
 data_dir.mkdir(parents=True, exist_ok=True)
 demo_video_path = data_dir / "sample_surf_session.mp4"
 
-# --- STEP 1: VIDEO SOURCE ---
-st.markdown("#### 1. Vidéo de Session")
-col_upload, col_demo = st.columns([3, 2])
+# --- STEP 2: VIDEO SOURCE (DROPZONE ÉPURÉE SANS CHARGEMENT LOURD AUTOMATIQUE) ---
+st.markdown("#### 🌊 Déposer votre Vidéo de Surf")
+col_upload, col_demo = st.columns([3, 1])
 
 with col_upload:
     uploaded_file = st.file_uploader(
@@ -328,7 +353,7 @@ with col_upload:
     )
 
 with col_demo:
-    use_demo = st.button("🌊 Charger la Session Démo (1080p)", use_container_width=True)
+    use_demo = st.button("🌊 Charger la Démo (1080p)", use_container_width=True)
 
 video_target_path = None
 
@@ -338,7 +363,7 @@ if uploaded_file is not None:
         f.write(uploaded_file.getbuffer())
     video_target_path = temp_path
     st.caption(f"Fichier actif : `{uploaded_file.name}`")
-elif use_demo or demo_video_path.exists():
+elif use_demo:
     download_or_generate_sample_video(demo_video_path)
     video_target_path = demo_video_path
     st.caption(f"Fichier actif : `{demo_video_path.name}` (Séquence réelle 1080p)")
@@ -347,38 +372,41 @@ if video_target_path:
     col_vid, col_action = st.columns([2, 1])
     with col_vid:
         st.video(str(video_target_path))
-    
+
     with col_action:
-        st.markdown("#### 2. Traitement")
-        st.caption(f"Paramètres actifs : Surfeur **{surfer_height_cm} cm** • Planche **{board_choice}** • Ratio **{aspect_option}**")
-        launch_btn = st.button("🎬 Lancer le Cadrage & Découpage", type="primary", use_container_width=True)
+        st.markdown("#### ⚡ Analyse & Découpage")
+        st.caption(f"Configuration : Surfeur **{surfer_height_cm} cm** • Planche **{board_choice}** • Format **{aspect_option}**")
+        launch_btn = st.button("🚀 Lancer l'Analyse Instantanée", type="primary", use_container_width=True)
 
     if launch_btn:
         progress_bar = st.progress(0.0)
         status_text = st.empty()
 
-        config = PipelineConfig(
+        # Get warm cached pipeline with pre-loaded models in Apple Silicon unified memory
+        pipeline = get_cached_pipeline(
             model_name=model_name,
-            conf_threshold=conf_thresh,
-            aspect_ratio=aspect_option,
-            zoom_scale=zoom_scale,
-            smoothing_factor=smoothing,
-            lead_room_factor=lead_room,
-            min_ride_duration_sec=min_active_duration,
-            speed_takeoff_thresh=speed_thresh,
-            render_hud=enable_hud,
-            render_segmentation=enable_segmentation,
-            consolidate_rides=enable_consolidation,
-            max_merge_gap_sec=max_merge_gap,
-            save_split_screen=enable_split_screen,
+            pose_model_name="yolov8n-pose.pt",
+            enable_pose=enable_pose,
             split_mode=split_mode,
-            enable_pose_estimation=enable_pose,
+            aspect_ratio=aspect_option,
             surfer_height_m=surfer_height_m,
             board_length_m=board_length_m,
-            enable_wave_metrics=enable_wave_metrics,
+            fast_scan=True,
         )
-
-        pipeline = SurfTrackingPipeline(config)
+        # Apply runtime settings
+        pipeline.config.aspect_ratio = aspect_option
+        pipeline.config.split_mode = split_mode
+        pipeline.config.save_split_screen = enable_split_screen
+        pipeline.config.zoom_scale = zoom_scale
+        pipeline.config.smoothing_factor = smoothing
+        pipeline.config.lead_room_factor = lead_room
+        pipeline.config.min_ride_duration_sec = min_active_duration
+        pipeline.config.speed_takeoff_thresh = speed_thresh
+        pipeline.config.render_hud = enable_hud
+        pipeline.config.render_segmentation = enable_segmentation
+        pipeline.config.consolidate_rides = enable_consolidation
+        pipeline.config.max_merge_gap_sec = max_merge_gap
+        pipeline.config.fast_scan = True
 
         def update_progress(ratio: float, msg: str):
             progress_bar.progress(ratio)
@@ -389,7 +417,7 @@ if video_target_path:
             video_path=str(video_target_path),
             output_dir="outputs",
             progress_callback=update_progress,
-            save_full_diagnostic=True,
+            save_full_diagnostic=False,
             save_ride_clips=True,
         )
         elapsed = time.time() - start_time

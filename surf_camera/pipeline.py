@@ -24,7 +24,7 @@ from .utils import draw_hud, draw_minimalist_badge, draw_neon_skeleton, draw_bio
 @dataclass
 class PipelineConfig:
     """Configuration settings for the Surf Tracking Pipeline."""
-    model_name: str = "yolov8n-seg.pt"
+    model_name: str = "weights/yolov8n_surf_v2_best.pt" if Path("weights/yolov8n_surf_v2_best.pt").exists() else "yolov8n-seg.pt"
     conf_threshold: float = 0.25
     aspect_ratio: str = "16:9"         # '16:9' or '9:16'
     zoom_scale: float = 4.5
@@ -46,6 +46,7 @@ class PipelineConfig:
     enable_pose_estimation: bool = True
     pose_model_name: str = "yolov8n-pose.pt"
     split_mode: str = "biomechanical"  # 'biomechanical' or 'wide_ptz'
+    fast_scan: bool = True             # Fast 2-pass inference (scan session quickly, compute HD pose only on rides)
 
     @classmethod
     def from_yaml(cls, path: Optional[str] = None) -> "PipelineConfig":
@@ -74,6 +75,7 @@ class PipelineConfig:
             enable_pose_estimation=pose_cfg.get("enable", True),
             pose_model_name=pose_cfg.get("model_name", "yolov8n-pose.pt"),
             split_mode=split_mode,
+            fast_scan=cfg.get("fast_scan", True),
         )
 
 
@@ -224,8 +226,8 @@ class SurfTrackingPipeline:
                         meters_per_pixel=current_scale,
                     )
 
-                # Pose Estimation and Maneuver Classification on riding/takeoff surfer
-                if self.pose_estimator is not None and current_states.get(primary_track.track_id) in (SurferState.RIDING, SurferState.TAKE_OFF):
+                # Pose Estimation (evaluated in Pass 1 if not fast_scan, otherwise deferred to Pass 2 on rides)
+                if not self.config.fast_scan and self.pose_estimator is not None and current_states.get(primary_track.track_id) in (SurferState.RIDING, SurferState.TAKE_OFF):
                     current_pose = self.pose_estimator.estimate(frame, primary_track.bbox)
                     if self.maneuver_classifier is not None:
                         current_maneuver = self.maneuver_classifier.update(
@@ -387,6 +389,7 @@ class SurfTrackingPipeline:
                     camera_boxes=camera_boxes_history,
                     frame_metrics_history=frame_metrics_history,
                     fps=fps,
+                    active_bboxes=active_surfer_history,
                 )
 
         if progress_callback:
@@ -487,6 +490,7 @@ class SurfTrackingPipeline:
         camera_boxes: List[Optional[CameraBox]],
         frame_metrics_history: List[Dict],
         fps: float,
+        active_bboxes: Optional[List[Optional[Tuple[float, float, float, float]]]] = None,
     ) -> List[str]:
         """
         Renders a dual-screen comparison video (1920x1080) for each ride:
@@ -525,6 +529,26 @@ class SurfTrackingPipeline:
                 wave_h = w_obj.height_meters if w_obj else ride.wave_height_meters
                 pose_obj = met.get("pose")
                 m_obj = met.get("maneuver")
+
+                # On-demand micro-biomechanical inference on the crop during Pass 2 (Fast Scan mode)
+                if pose_obj is None and self.pose_estimator is not None and self.config.enable_pose_estimation:
+                    abox = active_bboxes[f_idx] if (active_bboxes and f_idx < len(active_bboxes) and active_bboxes[f_idx] is not None) else (
+                        (float(box.x1), float(box.y1), float(box.x2), float(box.y2)) if (box and box.is_valid) else None
+                    )
+                    if abox is not None:
+                        pose_obj = self.pose_estimator.estimate(frame, abox)
+                        met["pose"] = pose_obj
+                        if self.maneuver_classifier is not None:
+                            cx = (abox[0] + abox[2]) / 2.0
+                            cy = (abox[1] + abox[3]) / 2.0
+                            m_obj = self.maneuver_classifier.update(
+                                pose=pose_obj,
+                                wave=w_obj,
+                                surfer_center=(cx, cy),
+                                velocity=(0.0, 0.0),
+                                speed_kmh=spd_kmh,
+                            )
+                            met["maneuver"] = m_obj
 
                 if is_biomech:
                     # =========================================================
@@ -678,5 +702,18 @@ class SurfTrackingPipeline:
             cap.release()
             writer.release()
             split_paths.append(str(split_path))
+
+            # Consolidate detected maneuvers for this ride (from on-demand Pass 2 inference)
+            s_idx = max(0, ride.start_frame)
+            e_idx = min(len(frame_metrics_history), ride.end_frame)
+            ride_maneuvers = [
+                frame_metrics_history[i].get("maneuver") for i in range(s_idx, e_idx)
+                if frame_metrics_history[i].get("maneuver") is not None and frame_metrics_history[i]["maneuver"].is_active and frame_metrics_history[i]["maneuver"].maneuver_type != ManeuverType.NONE
+            ]
+            if ride_maneuvers:
+                ride.maneuvers_detected = list(dict.fromkeys(m.name for m in ride_maneuvers))
+                best_m = max(ride_maneuvers, key=lambda m: m.score_out_of_10)
+                ride.best_maneuver = best_m.name
+                ride.maneuver_score = best_m.score_out_of_10
 
         return split_paths

@@ -11,18 +11,20 @@ if ! command -v python3 &> /dev/null; then
     exit 1
 fi
 
-if [ ! -d ".venv" ]; then
-    echo "📦 Création de l'environnement virtuel (.venv)..."
-    python3 -m venv .venv
+PYTHON_BIN=""
+if python3 -c "import streamlit, ultralytics, cv2, torch" &> /dev/null; then
+    PYTHON_BIN="python3"
+elif [ -f "$HOME/.virtualenvs/surf-camera-vision/bin/python" ]; then
+    PYTHON_BIN="$HOME/.virtualenvs/surf-camera-vision/bin/python"
+else
+    VENV_DIR="$HOME/.virtualenvs/surf-camera-vision"
+    mkdir -p "$HOME/.virtualenvs"
+    python3 -m venv --system-site-packages "$VENV_DIR" 2>/dev/null || python3 -m venv "$VENV_DIR"
+    PYTHON_BIN="$VENV_DIR/bin/python"
+    if ! "$PYTHON_BIN" -c "import streamlit, ultralytics, cv2, torch" &> /dev/null; then
+        "$PYTHON_BIN" -m pip install -r requirements.txt
+    fi
 fi
 
-source .venv/bin/activate
-
-if ! python -c "import streamlit, ultralytics, cv2, yaml" &> /dev/null; then
-    echo "⚡ Installation des dépendances..."
-    pip install --upgrade pip
-    pip install -r requirements.txt
-fi
-
-echo "🚀 Lancement de l'application..."
-python -m streamlit run app.py
+echo "🚀 Lancement du Studio Web Streamlit..."
+exec "$PYTHON_BIN" -m streamlit run app.py --server.headless=true --browser.gatherUsageStats=false
