@@ -125,9 +125,9 @@ current_cfg = load_config()
 st.markdown("""
 <div class="brand-container">
     <span class="brand-title">🏄 Surf-Camera-Vision</span>
-    <span class="brand-badge">STUDIO v0.2.1</span>
+    <span class="brand-badge">STUDIO v2.0 • BIOMECHANICS & POSE</span>
 </div>
-<div class="brand-subtitle">Cameraman virtuel intelligent (Digital PTZ) & segmentation instance de vagues</div>
+<div class="brand-subtitle">Cameraman virtuel intelligent (Digital PTZ), analyse biomécanique 17 keypoints & classification des figures</div>
 """, unsafe_allow_html=True)
 
 # --- SIDEBAR CONFIGURATION ---
@@ -219,14 +219,35 @@ with st.sidebar.expander("🎥 Cadrage & Composition PTZ", expanded=True):
         help="Inertie de la rotule fluide. Valeur basse = suivi ultra-doux sans tremblement."
     )
     enable_split_screen = st.toggle("Générer la vidéo Double Écran (Side-by-Side 1080p)", value=True)
+    if enable_split_screen:
+        split_mode_options = [
+            "🔬 Laboratoire Biomécanique (Avatar 3D + Vidéo Réelle)",
+            "📺 Plan Large Fixe (Plage) vs Digital PTZ",
+        ]
+        def_split = current_cfg.get("cameraman", {}).get("split_mode", "biomechanical")
+        def_split_idx = 0 if def_split == "biomechanical" else 1
+        split_mode_choice = st.selectbox(
+            "Mode Double Écran",
+            options=split_mode_options,
+            index=def_split_idx,
+            help="Choisis entre le studio biomécanique cinématique et la vue large comparative."
+        )
+        split_mode = "biomechanical" if "Biomécanique" in split_mode_choice else "wide_ptz"
+    else:
+        split_mode = "biomechanical"
 
 with st.sidebar.expander("🎯 Détection & IA", expanded=False):
-    model_choice = st.selectbox(
-        "Modèle YOLO",
-        options=["yolov8n-seg.pt (Instance Segmentation)", "yolov8n.pt (Boîtes seules)"],
-        index=0,
-    )
-    model_name = "yolov8n-seg.pt" if "seg" in model_choice else "yolov8n.pt"
+    model_options = [
+        "yolov8n-seg.pt (Instance Segmentation COCO)",
+        "yolov8n.pt (Boîtes seules)",
+    ]
+    ft_weights = Path("weights/yolov8n_surf_v2_best.pt")
+    if ft_weights.exists():
+        model_options.insert(0, f"{ft_weights.name} (Modèle Spécialisé Surf v2)")
+
+    model_choice = st.selectbox("Modèle YOLO Détection", options=model_options, index=0)
+    model_name = "weights/yolov8n_surf_v2_best.pt" if "Surf v2" in model_choice else ("yolov8n-seg.pt" if "seg" in model_choice else "yolov8n.pt")
+    enable_pose = st.toggle("🔬 Estimation de Pose Articulaire (17 Keypoints)", value=True, help="Active YOLOv8-Pose sur le surfeur pour extraire les angles de genoux, compression et inclinaison.")
     enable_segmentation = st.toggle("Masques de segmentation polygonaux", value=True)
     enable_hud = st.toggle("Afficher la télémétrie incrustée (HUD)", value=True)
     conf_thresh = st.slider("Seuil de confiance", 0.15, 0.60, 0.20, 0.05)
@@ -258,12 +279,17 @@ with col_save:
                 "smoothing_factor": float(smoothing),
                 "lead_room_factor": float(lead_room),
                 "enable_split_screen": enable_split_screen,
+                "split_mode": split_mode,
             },
             "detection": {
                 "model_name": model_name,
                 "conf_threshold": float(conf_thresh),
                 "enable_segmentation": enable_segmentation,
                 "enable_hud": enable_hud,
+            },
+            "pose_estimation": {
+                "enable": enable_pose,
+                "model_name": "yolov8n-pose.pt",
             },
             "state_machine": {
                 "min_ride_duration_sec": float(min_active_duration),
@@ -345,6 +371,8 @@ if video_target_path:
             consolidate_rides=enable_consolidation,
             max_merge_gap_sec=max_merge_gap,
             save_split_screen=enable_split_screen,
+            split_mode=split_mode,
+            enable_pose_estimation=enable_pose,
             surfer_height_m=surfer_height_m,
             board_length_m=board_length_m,
             enable_wave_metrics=enable_wave_metrics,
@@ -418,12 +446,20 @@ if "results" in st.session_state:
                 ride = rides[idx] if idx < len(rides) else None
                 if ride:
                     wave_str = format_wave_dual_units(ride.wave_height_meters)
-                    ride_title = f"Vague #{ride.ride_id} — Pic : {ride.max_speed_kmh:.1f} km/h • Vague : {wave_str} [{ride.wave_category}] • {ride.duration_sec:.1f}s ({ride.direction})"
+                    m_badge = f"🔥 {ride.best_maneuver} ({ride.maneuver_score}/10)" if (ride.best_maneuver and ride.best_maneuver != "Glisse Neutre") else "Glisse Continue"
+                    ride_title = f"Vague #{ride.ride_id} — {m_badge} • Pic : {ride.max_speed_kmh:.1f} km/h • Vague : {wave_str} [{ride.wave_category}] • {ride.duration_sec:.1f}s ({ride.direction})"
                 else:
                     ride_title = f"Ride #{idx+1}"
 
                 st.markdown(f"##### 🌊 {ride_title}")
-                st.caption(f"Comparatif synchronisé 1080p : Plan large fixe plage avec carré PTZ vs Découpage dynamique ({aspect_selected}).")
+                if "biomech" in Path(split_path).name:
+                    st.caption(f"🔬 Studio Biomécanique 1080p : Plan recadré avec squelette néon vs Laboratoire Vectoriel 3D & télémétrie angulaire.")
+                else:
+                    st.caption(f"Comparatif synchronisé 1080p : Plan large fixe plage avec carré PTZ vs Découpage dynamique ({aspect_selected}).")
+
+                if ride and ride.maneuvers_detected:
+                    st.caption("Figures identifiées : " + " • ".join([f"**{m}**" for m in ride.maneuvers_detected]))
+
                 st.video(split_path)
 
                 col_btn_split, col_btn_crop = st.columns(2)
@@ -458,12 +494,16 @@ if "results" in st.session_state:
             for idx, clip_path in enumerate(results["ride_clips"]):
                 ride = rides[idx]
                 wave_str = format_wave_dual_units(ride.wave_height_meters)
-                st.markdown(f"##### Vague #{ride.ride_id} — Vitesse Pic : `{ride.max_speed_kmh:.1f} km/h` • Vague : `{wave_str}` ({ride.direction})")
+                m_lead = f"[{ride.best_maneuver}] " if (ride.best_maneuver and ride.best_maneuver != "Glisse Neutre") else ""
+                st.markdown(f"##### {m_lead}Vague #{ride.ride_id} — Vitesse Pic : `{ride.max_speed_kmh:.1f} km/h` • Vague : `{wave_str}` ({ride.direction})")
                 c_vid, c_info = st.columns([2, 1])
                 with c_vid:
                     st.video(clip_path)
                 with c_info:
+                    m_card = f"- **🏆 Figure Clé :** `{ride.best_maneuver}` (Score : `{ride.maneuver_score}/10`)\n" if (ride.best_maneuver and ride.best_maneuver != "Glisse Neutre") else ""
+                    m_list = ", ".join(ride.maneuvers_detected) if ride.maneuvers_detected else "Glisse Neutre"
                     st.markdown(f"""
+                    {m_card}- **🤸 Figures Détectées :** `{m_list}`
                     - **⚡ Vitesse Max (Pic) :** `{ride.max_speed_kmh:.1f} km/h`
                     - **🏄 Vitesse Moyenne :** `{ride.avg_speed_kmh:.1f} km/h`
                     - **🌊 Hauteur de Vague :** `{wave_str}`

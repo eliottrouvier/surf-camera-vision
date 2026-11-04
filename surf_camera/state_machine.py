@@ -41,6 +41,9 @@ class RideEvent:
     wave_category: str = "Waist High (2-3ft)"
     speed_series_kmh: List[float] = field(default_factory=list)
     wave_height_series_m: List[float] = field(default_factory=list)
+    best_maneuver: str = "Glisse Continue"
+    maneuver_score: float = 5.0
+    maneuvers_detected: List[str] = field(default_factory=list)
 
 
 class SurferStateMachine:
@@ -231,6 +234,14 @@ class SurferStateMachine:
                 combined_wave_hs = current.wave_height_series_m + next_ride.wave_height_series_m
                 merged_avg_kmh = float(np.mean(combined_speeds)) if combined_speeds else 0.0
 
+                combined_maneuvers = list(dict.fromkeys(current.maneuvers_detected + next_ride.maneuvers_detected))
+                if current.maneuver_score >= next_ride.maneuver_score:
+                    merged_best_maneuver = current.best_maneuver
+                    merged_maneuver_score = current.maneuver_score
+                else:
+                    merged_best_maneuver = next_ride.best_maneuver
+                    merged_maneuver_score = next_ride.maneuver_score
+
                 current = RideEvent(
                     ride_id=current.ride_id,
                     surfer_id=current.surfer_id,
@@ -250,6 +261,9 @@ class SurferStateMachine:
                     wave_category=merged_wave_cat,
                     speed_series_kmh=combined_speeds,
                     wave_height_series_m=combined_wave_hs,
+                    best_maneuver=merged_best_maneuver,
+                    maneuver_score=merged_maneuver_score,
+                    maneuvers_detected=combined_maneuvers,
                 )
             else:
                 merged.append(current)

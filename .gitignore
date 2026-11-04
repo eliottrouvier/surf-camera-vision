@@ -23,6 +23,8 @@ yolov11*.pt
 outputs/*
 !outputs/.gitkeep
 runs/
+dataset_surf/
+weights/
 
 # Streamlit
 .streamlit/*

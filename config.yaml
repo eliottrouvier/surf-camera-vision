@@ -11,11 +11,15 @@ cameraman:
   smoothing_factor: 0.1
   lead_room_factor: 0.35
   enable_split_screen: true
+  split_mode: biomechanical
 detection:
   model_name: yolov8n-seg.pt
   conf_threshold: 0.2
   enable_segmentation: true
   enable_hud: true
+pose_estimation:
+  enable: true
+  model_name: yolov8n-pose.pt
 state_machine:
   min_ride_duration_sec: 1.2
   speed_takeoff_thresh: 3.5

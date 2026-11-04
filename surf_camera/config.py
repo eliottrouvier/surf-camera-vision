@@ -115,13 +115,18 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "zoom_scale": 4.0,          # 4.0x taille surfeur
         "smoothing_factor": 0.10,   # Amorti EMA
         "lead_room_factor": 0.35,   # Anticipation règle des tiers
-        "enable_split_screen": True # Double écran 1080p
+        "enable_split_screen": True, # Double écran 1080p
+        "split_mode": "biomechanical", # 'biomechanical' (Avatar 3D) ou 'wide_ptz'
     },
     "detection": {
         "model_name": "yolov8n-seg.pt",
         "conf_threshold": 0.20,
         "enable_segmentation": True,
         "enable_hud": True,
+    },
+    "pose_estimation": {
+        "enable": True,
+        "model_name": "yolov8n-pose.pt",
     },
     "state_machine": {
         "min_ride_duration_sec": 1.2,

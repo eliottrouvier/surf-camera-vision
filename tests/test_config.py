@@ -75,3 +75,5 @@ def test_pipeline_config_from_yaml(tmp_path):
     assert pipeline_cfg.surfer_height_m == 1.85
     assert pytest.approx(pipeline_cfg.board_length_m, 0.01) == 1.73
     assert pipeline_cfg.aspect_ratio == "9:16"
+    assert pipeline_cfg.enable_pose_estimation is True
+    assert pipeline_cfg.split_mode == "biomechanical"

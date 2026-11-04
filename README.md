@@ -1,14 +1,14 @@
-# 🏄 Surf-Camera-Vision : Autonomous Virtual PTZ (pan-tilt-zoom) 
+# 🏄 Surf-Camera-Vision : Autonomous Virtual PTZ & Biomechanical Lab (v2.0)
 
 [![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://share.streamlit.io)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-ee4c2c.svg)](https://pytorch.org/)
 [![YOLOv8](https://img.shields.io/badge/YOLO-Ultralytics-00ffff.svg)](https://docs.ultralytics.com/)
 [![OpenCV](https://img.shields.io/badge/OpenCV-Computer%20Vision-5c3ee8.svg)](https://opencv.org/)
-[![Streamlit](https://img.shields.io/badge/Streamlit-Studio%20v0.2.1-ff4b4b.svg)](https://streamlit.io/)
+[![Streamlit](https://img.shields.io/badge/Streamlit-Studio%20v2.0-ff4b4b.svg)](https://streamlit.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-> **Computer Vision & Cameraman Virtuel (Digital PTZ) : segmentation d'instance (surfeur & planche), détection automatique de take-off, suivi de trajectoire et recadrage cinématique fluide de sessions de surf.**
+> **Computer Vision, Cameraman Virtuel (Digital PTZ) & Coach Biomécanique IA : segmentation d'instance (surfeur & planche), estimation de posture articulaire (17 keypoints YOLOv8-Pose), classification automatique des manœuvres (Bottom Turn, Roller, Tube) et rendu studio comparatif 1080p Biomechanical Lab.**
 
 <div align="center">
   <h3>🎯 Détection & Segmentation d'Instance en Milieu Réel (iPhone 9:16)</h3>
@@ -113,6 +113,35 @@ où $S$ représente le ratio d'échelle métrique (mètres par pixel) estimé pa
 
 ---
 
+## 🚀 Nouveautés Surf AI v2 : Biomécanique & Classification des Manœuvres
+
+La **v2.0** enrichit le système d'une analyse articulée fine pour transformer chaque vidéo en outil de perfectionnement technique :
+
+### 1. Inférence Hybride à 2 Niveaux (Macro-Perception & Micro-Pose)
+Pour conserver des performances ultra-rapides en temps réel, l'estimation de pose ne traite pas toute la frame 4K / 1080p :
+- **Niveau 1 :** Détection et tracking global (surfeur debout sur la vague).
+- **Niveau 2 :** Extraction d'un crop haute résolution centré ($288 \times 288$ px) envoyé à **YOLOv8-Pose** sur accélération Apple Silicon MPS (~3ms par inférence).
+- **Re-projection :** Les 17 keypoints sont recalculés dans le repère mondial de la vidéo et sur le plan cadré.
+
+### 2. Moteur Cinématique & Télémétrie Articulaire
+- **Flexion des genoux ($\theta_{\text{knee}}$) :** Mesure angulaire de 0° à 180° calculée par produit scalaire $\mathbf{P}_{\text{hip}} - \mathbf{P}_{\text{knee}} - \mathbf{P}_{\text{ankle}}$.
+- **Inclinaison du torse ($\theta_{\text{torso}}$) :** Orientation du vecteur hanches ➔ épaules par rapport à la verticale.
+- **Taux de compression ($C_{\text{ratio}}$) :** Hauteur bassin-chevilles normalisée par la taille du surfeur.
+- **Accélération centrifuge (G-Force) :** Taux de rotation angulaire corrélé à la vitesse instantanée.
+
+### 3. Classification Automatique des Figures
+- 🔥 **Bottom Turn :** Position en bas de vague ($y > 0.55$), inclinaison du torse $\ge 24^\circ$, flexion des genoux $< 125^\circ$.
+- ⚡ **Roller / Snap :** Position sommitale crête ($y \le 0.35$), rotation brutale des épaules ($\Delta \phi \ge 15^\circ$) et redirection de vitesse.
+- 🌊 **Tube / Barrel :** Hyper-flexion ($\theta_{\text{knee}} < 85^\circ$), compression $C_{\text{ratio}} < 0.48$ et position continue sous la lèvre.
+- 🏄 **Carve / Cutback :** Prise de carre médiane fluide avec inclinaison prolongée.
+
+### 4. Rendu Studio Split-Screen "Biomechanical Lab" (1080p)
+Format side-by-side synchronisé :
+- **Gauche :** Plan d'action réel avec squelette néon incrusté sur le surfeur et badge flottant de manœuvre.
+- **Droite :** Studio sombre avec grille perspective, avatar vectoriel 3D luminescent centré, et jauges cinématiques en direct (flexion, inclinaison, G-force, vitesse km/h).
+
+---
+
 ## 🏗️ Architecture du Pipeline
 
 ```mermaid
@@ -179,7 +208,7 @@ python3 track_surf.py --input data/user_surf_iphone.mov \
 ```bash
 pytest tests/ -v
 ```
-Vérifie le respect des bordures (zéro bande noire), la transition de la machine à états, les équations de cadrage cinématique, la conversion d'unités et le chargement de `config.yaml` (20 tests validés).
+Vérifie le respect des bordures (zéro bande noire), la transition de la machine à états, les équations de cadrage cinématique, la conversion d'unités, les angles articulaires 3 points, la classification des manœuvres et le studio biomécanique (**27 tests validés**).
 
 ---
 
@@ -191,22 +220,27 @@ surf-camera-vision/
 ├── launch_app.bat             # 🪟 Lanceur 1-clic Windows (double-clic)
 ├── start.sh                   # 🐧 Lanceur terminal Linux / macOS
 ├── config.yaml                # ⚙️ Configuration centralisée & valeurs par défaut
-├── app.py                     # Studio Web Streamlit v0.2.1
+├── app.py                     # Studio Web Streamlit v2.0 (Biomechanical Lab)
 ├── track_surf.py              # CLI batch avec support cm & ft/in
+├── train_surf_yolo.py         # Script de fine-tuning local sur Apple Silicon (MPS)
 ├── demo.py                    # Démo 1-clic autonome
 ├── packages.txt               # Dépendances système Streamlit Cloud (ffmpeg, libgl1)
 ├── requirements.txt           # Dépendances Python
+├── dataset_surf/              # Dataset préparé & augmenté (train/val + augmentations marines)
 ├── surf_camera/
 │   ├── config.py              # Gestionnaire config.yaml & conversion d'unités
 │   ├── detector.py            # YOLOv8 (surfeur & planche)
 │   ├── tracker.py             # Spatio-temporal tracker & vitesse
-│   ├── state_machine.py       # Classification Rame -> Take-Off -> Surf
+│   ├── state_machine.py       # Classification Rame -> Take-Off -> Surf & consolidation
 │   ├── cameraman.py           # Digital PTZ (Lead Room & lissage)
+│   ├── pose_estimator.py      # Moteur d'estimation de pose 17 keypoints (YOLOv8-Pose)
+│   ├── maneuver_classifier.py # Détecteur de figures (Bottom Turn, Roller, Tube, Carve)
 │   ├── scale_estimator.py     # JointScaleVAE & calibration métrique conjointe
 │   ├── wave_analyzer.py       # Segmentation de la masse d'eau & hauteur crête/creux
-│   ├── pipeline.py            # Moteur d'assemblage & encodage H.264
-│   └── utils.py               # Badge minimaliste (KM/H, M/FT) & HUD télémétrique
-└── tests/                     # Suite de tests automatisés pytest (20 tests)
+│   ├── dataset_extractor.py   # Extracteur de keyframes & data augmentations marines
+│   ├── pipeline.py            # Moteur d'assemblage & studio double flux H.264
+│   └── utils.py               # Badge HUD, squelette néon & studio Biomechanical Lab
+└── tests/                     # Suite de tests automatisés pytest (27 tests)
 ```
 
 ---

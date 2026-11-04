@@ -35,6 +35,10 @@ class Track:
         return (x1 + x2) / 2.0, (y1 + y2) / 2.0
 
     @property
+    def centroid(self) -> Tuple[float, float]:
+        return self.center
+
+    @property
     def width(self) -> float:
         return max(1.0, self.bbox[2] - self.bbox[0])
 
