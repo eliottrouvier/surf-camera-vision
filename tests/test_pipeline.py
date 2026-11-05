@@ -34,7 +34,8 @@ def test_pipeline_synthetic_execution(tmp_path: Path):
     assert results["fps"] == 30.0
     assert results["diagnostic_video"] is not None
     assert Path(results["diagnostic_video"]).exists()
+    assert "ride_clips" in results
     assert "split_clips" in results
     if len(results["rides"]) > 0:
-        assert len(results["split_clips"]) > 0
-        assert Path(results["split_clips"][0]).exists()
+        assert len(results["ride_clips"]) > 0
+        assert Path(results["ride_clips"][0]).exists()

@@ -6,7 +6,7 @@ from .detector import SurferDetector, Detection
 from .tracker import SurferTracker, Track
 from .state_machine import SurferStateMachine, SurferState, RideEvent
 from .cameraman import VirtualCameraman, CameraBox
-from .scale_estimator import JointScaleVAE, MetricScaleEstimator, ScaleEstimate
+from .scale_estimator import MetricScaleEstimator, ScaleEstimate
 from .wave_analyzer import WaveSegmentationEngine, WaveMetrics, classify_wave_size
 from .pipeline import SurfTrackingPipeline, PipelineConfig
 from .config import (
@@ -33,7 +33,6 @@ __all__ = [
     "RideEvent",
     "VirtualCameraman",
     "CameraBox",
-    "JointScaleVAE",
     "MetricScaleEstimator",
     "ScaleEstimate",
     "WaveSegmentationEngine",

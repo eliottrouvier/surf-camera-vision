@@ -17,8 +17,7 @@ from .cameraman import VirtualCameraman, CameraBox
 from .scale_estimator import MetricScaleEstimator, ScaleEstimate
 from .wave_analyzer import WaveSegmentationEngine, WaveMetrics, classify_wave_size
 from .pose_estimator import PoseEstimator, SurferPose
-from .maneuver_classifier import ManeuverClassifier, ManeuverDetection, ManeuverType
-from .utils import draw_hud, draw_minimalist_badge, draw_neon_skeleton, draw_biomechanical_lab
+from .utils import draw_hud, draw_minimalist_badge, draw_neon_skeleton
 
 
 @dataclass
@@ -38,15 +37,15 @@ class PipelineConfig:
     render_segmentation: bool = True
     consolidate_rides: bool = True
     max_merge_gap_sec: float = 2.0
-    save_split_screen: bool = True
+    save_split_screen: bool = False
     output_resolution: Tuple[int, int] = (1280, 720) # Resolution for exported ride clips
-    surfer_height_m: float = 1.85  # 185 cm / 6'1" (1.85 m)
+    surfer_height_m: float = 1.75  # 175 cm / 5'9" (nominal surfer height)
     board_length_m: float = 1.73   # 5'8" (1.73 m)
     enable_wave_metrics: bool = True
-    enable_pose_estimation: bool = True
+    enable_pose_estimation: bool = False
     pose_model_name: str = "yolov8n-pose.pt"
-    split_mode: str = "biomechanical"  # 'biomechanical' or 'wide_ptz'
-    fast_scan: bool = True             # Fast 2-pass inference (scan session quickly, compute HD pose only on rides)
+    split_mode: str = "wide_ptz"
+    fast_scan: bool = True
 
     @classmethod
     def from_yaml(cls, path: Optional[str] = None) -> "PipelineConfig":
@@ -54,7 +53,7 @@ class PipelineConfig:
         from .config import load_config
         cfg = load_config(path)
         pose_cfg = cfg.get("pose_estimation", {})
-        split_mode = cfg.get("cameraman", {}).get("split_mode", "biomechanical")
+        split_mode = cfg.get("cameraman", {}).get("split_mode", "wide_ptz")
         return cls(
             model_name=cfg["detection"]["model_name"],
             conf_threshold=cfg["detection"]["conf_threshold"],
@@ -68,11 +67,11 @@ class PipelineConfig:
             consolidate_rides=cfg["state_machine"]["consolidate_rides"],
             render_hud=cfg["detection"]["enable_hud"],
             render_segmentation=cfg["detection"]["enable_segmentation"],
-            save_split_screen=cfg["cameraman"]["enable_split_screen"],
+            save_split_screen=cfg.get("cameraman", {}).get("enable_split_screen", False),
             surfer_height_m=cfg["surfer"]["height_m"],
             board_length_m=cfg["surfboard"]["length_m"],
             enable_wave_metrics=cfg["wave_metrics"]["enable"],
-            enable_pose_estimation=pose_cfg.get("enable", True),
+            enable_pose_estimation=pose_cfg.get("enable", False),
             pose_model_name=pose_cfg.get("model_name", "yolov8n-pose.pt"),
             split_mode=split_mode,
             fast_scan=cfg.get("fast_scan", True),
@@ -97,16 +96,13 @@ class SurfTrackingPipeline:
             nominal_board_length_m=self.config.board_length_m,
         )
         self.wave_engine = WaveSegmentationEngine()
+        self.pose_estimator = None
         if self.config.enable_pose_estimation:
             try:
                 self.pose_estimator = PoseEstimator(model_name=self.config.pose_model_name)
             except Exception as e:
                 print(f"⚠️ Avertissement : Impossible de charger le modèle de pose ({e}).")
                 self.pose_estimator = None
-            self.maneuver_classifier = ManeuverClassifier()
-        else:
-            self.pose_estimator = None
-            self.maneuver_classifier = None
         self.state_machine: Optional[SurferStateMachine] = None
         self.cameraman: Optional[VirtualCameraman] = None
 
@@ -119,8 +115,7 @@ class SurfTrackingPipeline:
         save_ride_clips: bool = True,
     ) -> Dict:
         """
-        Processes a full session video and extracts surfing rides.
-        Returns a dictionary with summary statistics and paths to generated clips.
+        Processes a surf session video file through the linear mono-pass pipeline.
         """
         video_path = Path(video_path)
         out_dir = Path(output_dir)
@@ -128,14 +123,13 @@ class SurfTrackingPipeline:
 
         cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
-            raise ValueError(f"Impossible d'ouvrir la vidéo : {video_path}")
+            raise FileNotFoundError(f"Impossible d'ouvrir la vidéo : {video_path}")
 
         fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 1
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-        # Initialize State Machine and Cameraman with video dimensions & FPS
         self.state_machine = SurferStateMachine(
             fps=fps,
             min_ride_duration_sec=self.config.min_ride_duration_sec,
@@ -152,20 +146,19 @@ class SurfTrackingPipeline:
             lead_room_factor=self.config.lead_room_factor,
         )
 
-        # Writers setup
-        diag_path = out_dir / f"{video_path.stem}_tracked_overview.mp4"
+        # Video writer for full session diagnostic
         diag_writer = None
+        diag_path = None
         if save_full_diagnostic:
+            diag_path = out_dir / f"{video_path.stem}_diagnostic.mp4"
             fourcc = cv2.VideoWriter_fourcc(*"avc1")
             diag_writer = cv2.VideoWriter(str(diag_path), fourcc, fps, (width, height))
             if not diag_writer.isOpened():
                 diag_writer = cv2.VideoWriter(str(diag_path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height))
 
-        # In-memory buffer of frame metadata and active camera boxes
-        frame_history: List[np.ndarray] = []
         camera_boxes_history: List[Optional[CameraBox]] = []
-        active_surfer_history: List[Optional[Tuple[float, float, float, float]]] = []
         frame_states_history: List[Dict[int, SurferState]] = []
+        active_surfer_history: List[Optional[Tuple[float, float, float, float]]] = []
         frame_metrics_history: List[Dict] = []
 
         frame_idx = 0
@@ -174,33 +167,32 @@ class SurfTrackingPipeline:
             if not ret:
                 break
 
-            # 1. Detect Surfers
+            # 1. Detection
             detections = self.detector.detect(frame)
 
-            # 2. Update Tracks
+            # 2. Tracking
             active_tracks = self.tracker.update(detections, frame_idx=frame_idx)
 
-            # 3. Update State Machine
+            # 3. State Machine Update
             current_states = self.state_machine.update(active_tracks, current_frame=frame_idx)
             frame_states_history.append(current_states)
 
-            # 4. Identify Primary Surfer for Virtual Cameraman
-            # Priority: Surfer currently in TAKE_OFF or RIDING state
-            primary_track: Optional[Track] = None
-            riding_tracks = [t for t in active_tracks if current_states.get(t.track_id) in (SurferState.RIDING, SurferState.TAKE_OFF)]
-            if len(riding_tracks) > 0:
-                primary_track = riding_tracks[0]
-            elif len(active_tracks) > 0:
-                # Default to fastest moving surfer
-                primary_track = max(active_tracks, key=lambda t: t.current_speed)
+            # 4. Virtual Cameraman & Primary Target Framing
+            primary_track = None
+            riding_tracks = [
+                t for t in active_tracks
+                if current_states.get(t.track_id) in (SurferState.RIDING, SurferState.TAKE_OFF)
+            ]
+            if riding_tracks:
+                primary_track = max(riding_tracks, key=lambda t: t.current_speed)
+            elif active_tracks:
+                primary_track = max(active_tracks, key=lambda t: t.bbox[2]*t.bbox[3])
 
-            # 5. Compute Virtual Cameraman Framing & Metrics
-            cam_box: Optional[CameraBox] = None
-            current_scale = 0.02
+            cam_box = None
+            current_scale = 0.022
             current_spd_kmh = 0.0
             wave_met: Optional[WaveMetrics] = None
             current_pose: Optional[SurferPose] = None
-            current_maneuver: Optional[ManeuverDetection] = None
 
             if primary_track is not None:
                 cam_box = self.cameraman.update(
@@ -209,8 +201,7 @@ class SurfTrackingPipeline:
                 )
                 is_standing = (current_states.get(primary_track.track_id) == SurferState.RIDING)
 
-                # Pose Estimation (evaluated in Pass 1 if not fast_scan, otherwise deferred to Pass 2 on rides)
-                if not self.config.fast_scan and self.pose_estimator is not None and current_states.get(primary_track.track_id) in (SurferState.RIDING, SurferState.TAKE_OFF):
+                if self.pose_estimator is not None and current_states.get(primary_track.track_id) in (SurferState.RIDING, SurferState.TAKE_OFF):
                     current_pose = self.pose_estimator.estimate(frame, primary_track.bbox)
 
                 if self.config.enable_wave_metrics:
@@ -232,15 +223,6 @@ class SurfTrackingPipeline:
                         meters_per_pixel=current_scale,
                     )
 
-                if not self.config.fast_scan and current_pose is not None and self.maneuver_classifier is not None:
-                    current_maneuver = self.maneuver_classifier.update(
-                        pose=current_pose,
-                        wave=wave_met,
-                        surfer_center=primary_track.centroid,
-                        velocity=primary_track.current_velocity,
-                        speed_kmh=current_spd_kmh,
-                    )
-
             camera_boxes_history.append(cam_box)
             active_surfer_history.append(primary_track.bbox if primary_track else None)
             frame_metrics_history.append({
@@ -248,10 +230,9 @@ class SurfTrackingPipeline:
                 "speed_kmh": current_spd_kmh,
                 "wave": wave_met,
                 "pose": current_pose,
-                "maneuver": current_maneuver,
             })
 
-            # 6. Render Diagnostic Overview
+            # Render Diagnostic Overview
             if diag_writer is not None:
                 diag_frame = frame.copy()
 
@@ -279,13 +260,6 @@ class SurfTrackingPipeline:
                         board_mask=track.current_board_mask,
                         render_segmentation=self.config.render_segmentation,
                     )
-
-                # Draw active maneuver badge in diagnostic HUD
-                if current_maneuver is not None and current_maneuver.is_active:
-                    m_text = f"{current_maneuver.name.upper()} ({current_maneuver.score_out_of_10:.1f}/10)"
-                    cv2.rectangle(diag_frame, (20, height - 60), (450, height - 20), (16, 20, 26), -1)
-                    cv2.rectangle(diag_frame, (20, height - 60), (450, height - 20), (0, 229, 255), 1)
-                    cv2.putText(diag_frame, m_text, (35, height - 33), cv2.FONT_HERSHEY_SIMPLEX, 0.60, (0, 229, 255), 2, cv2.LINE_AA)
 
                 # Draw Virtual Camera Crop Window (Magenta boundary rectangle)
                 if cam_box is not None:
@@ -326,38 +300,7 @@ class SurfTrackingPipeline:
         # Consolidate fragmented rides into unified waves
         final_rides = self.state_machine.get_consolidated_rides(max_gap_sec=self.config.max_merge_gap_sec) if self.config.consolidate_rides else self.state_machine.completed_rides
 
-        # Pass 2 Micro-Biomechanics: compute pose and maneuvers on active rides if fast_scan was enabled
-        if self.config.fast_scan and self.pose_estimator is not None and len(final_rides) > 0:
-            cap_pass2 = cv2.VideoCapture(str(video_path))
-            for ride in final_rides:
-                if self.maneuver_classifier:
-                    self.maneuver_classifier.reset()
-                cap_pass2.set(cv2.CAP_PROP_POS_FRAMES, ride.start_frame)
-                for f_idx in range(ride.start_frame, min(ride.end_frame, len(frame_metrics_history))):
-                    ret, f_frame = cap_pass2.read()
-                    if not ret:
-                        break
-                    abox = active_surfer_history[f_idx]
-                    if abox is not None:
-                        pose_obj = self.pose_estimator.estimate(f_frame, abox)
-                        met = frame_metrics_history[f_idx]
-                        met["pose"] = pose_obj
-                        if self.maneuver_classifier is not None:
-                            cx = (abox[0] + abox[2]) / 2.0
-                            cy = (abox[1] + abox[3]) / 2.0
-                            m_obj = self.maneuver_classifier.update(
-                                pose=pose_obj,
-                                wave=met.get("wave"),
-                                surfer_center=(cx, cy),
-                                velocity=(0.0, 0.0),
-                                speed_kmh=met.get("speed_kmh", 0.0),
-                            )
-                            met["maneuver"] = m_obj
-            cap_pass2.release()
-
-        # Enrich each ride with physical wave & kinematic metrics (WSL Compliant)
-        from .maneuver_classifier import compute_wsl_score
-
+        # Enrich each ride with physical wave & kinematic metrics
         for ride in final_rides:
             s_idx = max(0, ride.start_frame)
             e_idx = min(len(frame_metrics_history), ride.end_frame)
@@ -378,12 +321,6 @@ class SurfTrackingPipeline:
                 speeds = [m["speed_kmh"] for m in eval_mets if m.get("speed_kmh", 0.0) > 0.0]
                 waves = [m["wave"] for m in eval_mets if m.get("wave") is not None]
                 wave_hs = [w.height_meters for w in waves if w.height_meters > 0.0]
-                maneuvers = [
-                    m["maneuver"] for m in eval_mets
-                    if m.get("maneuver") is not None and m["maneuver"].is_active and m["maneuver"].maneuver_type != ManeuverType.NONE
-                ]
-                poses = [m["pose"] for m in eval_mets if m.get("pose") is not None]
-                mean_knee = float(np.mean([p.knee_angle_deg for p in poses])) if poses else 145.0
 
                 if speeds:
                     # Rolling median smoothing to reject detector jitter
@@ -411,28 +348,8 @@ class SurfTrackingPipeline:
                     ride.wave_height_feet = 3.3
                     ride.wave_category = classify_wave_size(1.00)
 
-                # Authentic WSL Scoring
-                wsl_score, wsl_cat, wsl_desc = compute_wsl_score(
-                    maneuvers_detected=maneuvers,
-                    duration_sec=ride.duration_sec,
-                    peak_speed_kmh=ride.max_speed_kmh,
-                    wave_height_m=ride.wave_height_meters,
-                    mean_knee_angle_deg=mean_knee,
-                )
-                ride.maneuver_score = wsl_score
-
-                if maneuvers:
-                    unique_names = list(dict.fromkeys(m.name for m in maneuvers))
-                    ride.maneuvers_detected = unique_names
-                    best_m = max(maneuvers, key=lambda m: m.score_out_of_10)
-                    ride.best_maneuver = best_m.name
-                else:
-                    ride.best_maneuver = "Glisse Neutre"
-                    ride.maneuvers_detected = ["Glisse Neutre"]
-
         # Step 7: Render Cropped Ride Clips
         rendered_clips = []
-        split_clips = []
         if save_ride_clips and len(final_rides) > 0:
             rendered_clips = self._render_ride_clips(
                 video_path=video_path,
@@ -444,16 +361,6 @@ class SurfTrackingPipeline:
                 frame_metrics_history=frame_metrics_history,
                 fps=fps,
             )
-            if self.config.save_split_screen:
-                split_clips = self._render_split_screen_clips(
-                    video_path=video_path,
-                    out_dir=out_dir,
-                    rides=final_rides,
-                    camera_boxes=camera_boxes_history,
-                    frame_metrics_history=frame_metrics_history,
-                    fps=fps,
-                    active_bboxes=active_surfer_history,
-                )
 
         if progress_callback:
             progress_callback(1.0, f"Session terminée ! {len(final_rides)} ride(s) détecté(s).")
@@ -465,7 +372,7 @@ class SurfTrackingPipeline:
             "rides": final_rides,
             "diagnostic_video": str(diag_path) if save_full_diagnostic else None,
             "ride_clips": rendered_clips,
-            "split_clips": split_clips,
+            "split_clips": [],
         }
 
     def _render_ride_clips(
@@ -544,239 +451,3 @@ class SurfTrackingPipeline:
             clip_paths.append(str(clip_path))
 
         return clip_paths
-
-    def _render_split_screen_clips(
-        self,
-        video_path: Path,
-        out_dir: Path,
-        rides: List[RideEvent],
-        camera_boxes: List[Optional[CameraBox]],
-        frame_metrics_history: List[Dict],
-        fps: float,
-        active_bboxes: Optional[List[Optional[Tuple[float, float, float, float]]]] = None,
-    ) -> List[str]:
-        """
-        Renders a dual-screen comparison video (1920x1080) for each ride:
-        - Mode 'biomechanical': Left: Action crop with real surfer + neon joints; Right: High-tech 3D skeleton studio & kinetic gauges.
-        - Mode 'wide_ptz': Left: Wide beach shot with PTZ box; Right: Dynamic stabilized PTZ crop.
-        """
-        split_paths = []
-        fourcc = cv2.VideoWriter_fourcc(*"avc1")
-        canvas_w, canvas_h = 1920, 1080
-        is_vertical = (self.config.aspect_ratio == "9:16")
-        is_biomech = (self.config.split_mode == "biomechanical")
-
-        for ride in rides:
-            mode_tag = "biomech" if is_biomech else "split_screen"
-            split_name = f"{video_path.stem}_ride_{ride.ride_id:02d}_{mode_tag}_{ride.duration_sec:.1f}s.mp4"
-            split_path = out_dir / split_name
-
-            cap = cv2.VideoCapture(str(video_path))
-            cap.set(cv2.CAP_PROP_POS_FRAMES, ride.start_frame)
-
-            writer = cv2.VideoWriter(str(split_path), fourcc, fps, (canvas_w, canvas_h))
-            if not writer.isOpened():
-                writer = cv2.VideoWriter(str(split_path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (canvas_w, canvas_h))
-
-            for f_idx in range(ride.start_frame, min(ride.end_frame, len(camera_boxes))):
-                ret, frame = cap.read()
-                if not ret:
-                    break
-
-                box = camera_boxes[f_idx] if f_idx < len(camera_boxes) else None
-                canvas = np.full((canvas_h, canvas_w, 3), 13, dtype=np.uint8)
-
-                met = frame_metrics_history[f_idx] if f_idx < len(frame_metrics_history) else {}
-                spd_kmh = met.get("speed_kmh", 0.0)
-                w_obj = met.get("wave")
-                wave_h = w_obj.height_meters if w_obj else ride.wave_height_meters
-                pose_obj = met.get("pose")
-                m_obj = met.get("maneuver")
-
-                # On-demand micro-biomechanical inference on the crop during Pass 2 (Fast Scan mode)
-                if pose_obj is None and self.pose_estimator is not None and self.config.enable_pose_estimation:
-                    abox = active_bboxes[f_idx] if (active_bboxes and f_idx < len(active_bboxes) and active_bboxes[f_idx] is not None) else (
-                        (float(box.x1), float(box.y1), float(box.x2), float(box.y2)) if (box and box.is_valid) else None
-                    )
-                    if abox is not None:
-                        pose_obj = self.pose_estimator.estimate(frame, abox)
-                        met["pose"] = pose_obj
-                        if self.maneuver_classifier is not None:
-                            cx = (abox[0] + abox[2]) / 2.0
-                            cy = (abox[1] + abox[3]) / 2.0
-                            m_obj = self.maneuver_classifier.update(
-                                pose=pose_obj,
-                                wave=w_obj,
-                                surfer_center=(cx, cy),
-                                velocity=(0.0, 0.0),
-                                speed_kmh=spd_kmh,
-                            )
-                            met["maneuver"] = m_obj
-
-                if is_biomech:
-                    # =========================================================
-                    # STUDIO BIOMECHANICAL LAB (Side-by-Side 1080p)
-                    # =========================================================
-                    # 1. Left Action Pane
-                    if box is not None and box.is_valid:
-                        crop = frame[box.y1:box.y2, box.x1:box.x2].copy()
-                        if crop.size == 0 or crop.shape[0] == 0 or crop.shape[1] == 0:
-                            crop = frame.copy()
-                    else:
-                        crop = frame.copy()
-
-                    # Overlay neon skeleton on the cropped surfer if pose detected
-                    if pose_obj is not None and box is not None and box.is_valid:
-                        kpts_crop = pose_obj.keypoints.copy()
-                        kpts_crop[:, 0] -= box.x1
-                        kpts_crop[:, 1] -= box.y1
-                        crop = draw_neon_skeleton(crop, kpts_crop, color=(0, 229, 255))
-
-                    pane_w = 920
-                    pane_h = 1040
-                    if is_vertical:
-                        scaled_w = int(pane_h * 9 / 16)
-                        crop_scaled = cv2.resize(crop, (scaled_w, pane_h), interpolation=cv2.INTER_AREA)
-                        x_off = 20 + (pane_w - scaled_w) // 2
-                        canvas[20:1060, x_off:x_off + scaled_w] = crop_scaled
-                    else:
-                        scaled_h = int(pane_w * 9 / 16)
-                        crop_scaled = cv2.resize(crop, (pane_w, scaled_h), interpolation=cv2.INTER_AREA)
-                        y_off = 20 + (pane_h - scaled_h) // 2
-                        canvas[y_off:y_off + scaled_h, 20:20 + pane_w] = crop_scaled
-
-                    # Left Action Badges
-                    cv2.rectangle(canvas, (35, 35), (420, 75), (18, 22, 28), -1)
-                    cv2.rectangle(canvas, (35, 35), (420, 75), (48, 54, 61), 1)
-                    cv2.circle(canvas, (55, 55), 6, (0, 255, 120), -1)
-                    cv2.putText(canvas, "PLAN RECADRE (ACTION REELLE)", (75, 61), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (255, 255, 255), 1, cv2.LINE_AA)
-
-                    if m_obj is not None and m_obj.is_active:
-                        m_txt = f"{m_obj.name.upper()}  •  {m_obj.score_out_of_10}/10"
-                        cv2.rectangle(canvas, (35, 995), (450, 1045), (18, 22, 28), -1)
-                        cv2.rectangle(canvas, (35, 995), (450, 1045), (0, 229, 255), 1)
-                        cv2.putText(canvas, m_txt, (50, 1030), cv2.FONT_HERSHEY_SIMPLEX, 0.58, (0, 229, 255), 2, cv2.LINE_AA)
-
-                    # 2. Right Biomechanical Lab Pane
-                    lab_pane = draw_biomechanical_lab(
-                        canvas_w=pane_w,
-                        canvas_h=pane_h,
-                        pose=pose_obj,
-                        maneuver=m_obj,
-                        speed_kmh=spd_kmh,
-                        wave_height_m=wave_h,
-                    )
-                    canvas[20:1060, 960:960 + pane_w] = lab_pane
-
-                    # Borders and separator
-                    cv2.rectangle(canvas, (20, 20), (940, 1060), (35, 40, 50), 1)
-                    cv2.rectangle(canvas, (960, 20), (1880, 1060), (35, 40, 50), 1)
-                    cv2.line(canvas, (950, 0), (950, 1080), (25, 30, 40), 2)
-
-                else:
-                    # =========================================================
-                    # ORIGINAL WIDE VS PTZ SPLIT SCREEN
-                    # =========================================================
-                    wide_frame = frame.copy()
-                    if box is not None and box.is_valid:
-                        cv2.rectangle(wide_frame, (box.x1, box.y1), (box.x2, box.y2), (255, 0, 220), 4)
-                        box_lbl = f"VIRTUAL PTZ [{self.config.aspect_ratio}]"
-                        cv2.rectangle(wide_frame, (box.x1, max(0, box.y1 - 32)), (box.x1 + 270, box.y1), (12, 12, 12), -1)
-                        cv2.rectangle(wide_frame, (box.x1, max(0, box.y1 - 32)), (box.x1 + 270, box.y1), (255, 0, 220), 1)
-                        cv2.putText(wide_frame, box_lbl, (box.x1 + 8, max(0, box.y1 - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
-
-                    if box is not None and box.is_valid:
-                        crop = frame[box.y1:box.y2, box.x1:box.x2]
-                        if crop.size == 0 or crop.shape[0] == 0 or crop.shape[1] == 0:
-                            crop = frame
-                    else:
-                        crop = frame
-
-                    if is_vertical:
-                        left_resized = cv2.resize(wide_frame, (1280, 720), interpolation=cv2.INTER_AREA)
-                        canvas[180:900, 0:1280] = left_resized
-                        cv2.rectangle(canvas, (0, 180), (1279, 899), (45, 45, 45), 1)
-
-                        cv2.rectangle(canvas, (24, 196), (340, 236), (10, 10, 10), -1)
-                        cv2.rectangle(canvas, (24, 196), (340, 236), (0, 255, 200), 1)
-                        cv2.putText(canvas, "PLAN LARGE FIXE (PLAGE)", (36, 224), cv2.FONT_HERSHEY_SIMPLEX, 0.58, (0, 255, 200), 2, cv2.LINE_AA)
-
-                        cv2.line(canvas, (1280 + 16, 0), (1280 + 16, 1080), (35, 40, 50), 2)
-
-                        right_resized = cv2.resize(crop, (608, 1080), interpolation=cv2.INTER_AREA)
-                        if self.config.render_hud:
-                            time_in_ride = max(0.0, (f_idx - ride.takeoff_frame) / fps)
-                            cum_dist = sum(
-                                frame_metrics_history[i].get("speed_kmh", 0.0) / 3.6 / fps
-                                for i in range(ride.start_frame, min(f_idx + 1, len(frame_metrics_history)))
-                            )
-                            right_resized = draw_minimalist_badge(
-                                right_resized,
-                                speed_kmh=spd_kmh,
-                                wave_height_m=wave_h,
-                                distance_m=cum_dist,
-                                ride_time_sec=time_in_ride,
-                                max_speed_kmh=ride.max_speed_kmh,
-                            )
-
-                        canvas[0:1080, 1280+32:1920] = right_resized
-
-                        cv2.rectangle(canvas, (1328, 20), (1750, 60), (10, 10, 10), -1)
-                        cv2.circle(canvas, (1348, 40), 6, (0, 0, 255), -1)
-                        cv2.putText(canvas, "DIGITAL PTZ (REELS 9:16)", (1366, 47), cv2.FONT_HERSHEY_SIMPLEX, 0.58, (255, 255, 255), 2, cv2.LINE_AA)
-
-                    else:
-                        pane_w = 940
-                        pane_h = int(pane_w * 9 / 16)
-                        y_off = (canvas_h - pane_h) // 2
-
-                        left_resized = cv2.resize(wide_frame, (pane_w, pane_h), interpolation=cv2.INTER_AREA)
-                        canvas[y_off:y_off+pane_h, 15:15+pane_w] = left_resized
-
-                        cv2.rectangle(canvas, (35, y_off + 15), (340, y_off + 50), (10, 10, 10), -1)
-                        cv2.putText(canvas, "PLAN LARGE FIXE (PLAGE)", (45, y_off + 38), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 200), 2, cv2.LINE_AA)
-
-                        cv2.line(canvas, (960, 0), (960, 1080), (35, 40, 50), 2)
-
-                        right_resized = cv2.resize(crop, (pane_w, pane_h), interpolation=cv2.INTER_AREA)
-                        if self.config.render_hud:
-                            time_in_ride = max(0.0, (f_idx - ride.takeoff_frame) / fps)
-                            cum_dist = sum(
-                                frame_metrics_history[i].get("speed_kmh", 0.0) / 3.6 / fps
-                                for i in range(ride.start_frame, min(f_idx + 1, len(frame_metrics_history)))
-                            )
-                            right_resized = draw_minimalist_badge(
-                                right_resized,
-                                speed_kmh=spd_kmh,
-                                wave_height_m=wave_h,
-                                distance_m=cum_dist,
-                                ride_time_sec=time_in_ride,
-                                max_speed_kmh=ride.max_speed_kmh,
-                            )
-
-                        canvas[y_off:y_off+pane_h, 965:965+pane_w] = right_resized
-
-                        cv2.rectangle(canvas, (985, y_off + 15), (1380, y_off + 50), (10, 10, 10), -1)
-                        cv2.circle(canvas, (1005, y_off + 32), 6, (0, 0, 255), -1)
-                        cv2.putText(canvas, f"DIGITAL PTZ ({self.config.aspect_ratio})", (1022, y_off + 38), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2, cv2.LINE_AA)
-
-                writer.write(canvas)
-
-            cap.release()
-            writer.release()
-            split_paths.append(str(split_path))
-
-            # Consolidate detected maneuvers for this ride (from on-demand Pass 2 inference)
-            s_idx = max(0, ride.start_frame)
-            e_idx = min(len(frame_metrics_history), ride.end_frame)
-            ride_maneuvers = [
-                frame_metrics_history[i].get("maneuver") for i in range(s_idx, e_idx)
-                if frame_metrics_history[i].get("maneuver") is not None and frame_metrics_history[i]["maneuver"].is_active and frame_metrics_history[i]["maneuver"].maneuver_type != ManeuverType.NONE
-            ]
-            if ride_maneuvers:
-                ride.maneuvers_detected = list(dict.fromkeys(m.name for m in ride_maneuvers))
-                best_m = max(ride_maneuvers, key=lambda m: m.score_out_of_10)
-                ride.best_maneuver = best_m.name
-                ride.maneuver_score = best_m.score_out_of_10
-
-        return split_paths

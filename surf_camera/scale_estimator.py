@@ -1,15 +1,12 @@
 """
-Joint Surfer-Board Metric Scale Estimator & Latent VAE Prior.
-Estimates real-world scale (meters per pixel) by fusing surfer posture,
-board geometry, and a probabilistic latent manifold (VAE) to ensure robust
-invariance against crouching, carving, and wave foam occlusions.
+Joint Surfer-Board Metric Scale Estimator.
+Estimates real-world scale (meters per pixel) directly from the surfer's
+nominal physical height and stabilized bounding box height in riding posture.
 """
 
 from dataclasses import dataclass
 from typing import Optional, Tuple, List, Any
 import numpy as np
-import torch
-import torch.nn as nn
 
 
 @dataclass
@@ -20,98 +17,26 @@ class ScaleEstimate:
     surfer_height_px: float
     board_length_px: float
     is_upright: bool
-    latent_z: Optional[np.ndarray] = None
-
-
-class JointScaleVAE(nn.Module):
-    """
-    Lightweight Variational Autoencoder modeling the joint distribution of
-    surfer dimensions and surfboard geometry in 2D camera projections.
-    Encodes [w_surfer, h_surfer, aspect_surfer, w_board, h_board, board_aspect]
-    into a smooth 4D latent space z ~ N(mu, sigma^2).
-    """
-    def __init__(self, input_dim: int = 6, latent_dim: int = 4):
-        super().__init__()
-        self.latent_dim = latent_dim
-
-        # Encoder: Feature vector -> Latent Gaussian parameters
-        self.encoder = nn.Sequential(
-            nn.Linear(input_dim, 32),
-            nn.LayerNorm(32),
-            nn.SiLU(),
-            nn.Linear(32, 16),
-            nn.SiLU(),
-        )
-        self.fc_mu = nn.Linear(16, latent_dim)
-        self.fc_logvar = nn.Linear(16, latent_dim)
-
-        # Decoder: Latent vector -> Reconstructed canonical scale & physical ratios
-        self.decoder = nn.Sequential(
-            nn.Linear(latent_dim, 16),
-            nn.SiLU(),
-            nn.Linear(16, 32),
-            nn.SiLU(),
-            nn.Linear(32, input_dim),
-        )
-
-        # Scale prediction head: estimates scale multiplier & uprightness probability
-        self.scale_head = nn.Sequential(
-            nn.Linear(latent_dim, 16),
-            nn.SiLU(),
-            nn.Linear(16, 2),  # [scale_factor_correction, upright_logit]
-        )
-
-        self._init_priors()
-
-    def _init_priors(self):
-        """Initializes weights with identity-like physical scaling."""
-        for m in self.modules():
-            if isinstance(m, nn.Linear):
-                nn.init.orthogonal_(m.weight, gain=0.8)
-                if m.bias is not None:
-                    nn.init.zeros_(m.bias)
-
-    def encode(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        h = self.encoder(x)
-        mu = self.fc_mu(h)
-        logvar = torch.clamp(self.fc_logvar(h), min=-6.0, max=2.0)
-        return mu, logvar
-
-    def reparameterize(self, mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
-        std = torch.exp(0.5 * logvar)
-        eps = torch.randn_like(std)
-        return mu + eps * std
-
-    def decode(self, z: torch.Tensor) -> torch.Tensor:
-        return self.decoder(z)
-
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        mu, logvar = self.encode(x)
-        z = self.reparameterize(mu, logvar)
-        recon_x = self.decode(z)
-        pred_scale = self.scale_head(z)
-        return recon_x, mu, logvar, pred_scale
+    latent_z: Optional[Any] = None
 
 
 class MetricScaleEstimator:
     """
-    Online Bayesian estimator combining physical priors with the JointScaleVAE.
-    Maintains a temporal smooth metric scale (m/pixel) across the session.
+    Direct and deterministic metric scale estimator.
+    Calculates meters per pixel based on nominal surfer height and stabilized
+    bounding box height in riding posture (~88% of standing height).
     """
     def __init__(
         self,
-        nominal_surfer_height_m: float = 1.85,  # 6'1" (1.85 m)
-        nominal_board_length_m: float = 1.73,  # 5'8" (1.73 m)
+        nominal_surfer_height_m: float = 1.75,
+        nominal_board_length_m: float = 1.73,
         ema_alpha: float = 0.15,
         device: str = "cpu",
     ):
         self.nominal_surfer_height_m = nominal_surfer_height_m
         self.nominal_board_length_m = nominal_board_length_m
         self.ema_alpha = ema_alpha
-        self.device = torch.device(device)
-
-        self.vae = JointScaleVAE().to(self.device)
-        self.vae.eval()
+        self.device = device
 
         self.current_m_per_px: Optional[float] = None
         self.history_scales: List[float] = []
@@ -126,36 +51,30 @@ class MetricScaleEstimator:
     ) -> ScaleEstimate:
         """
         Updates and returns the calibrated metric scale for the current frame.
-        Guarantees invariant scaling across crouching and prevents uncalibrated paddle distortion.
+        Directly calculates scale based on upright bounding box height.
         """
         sx1, sy1, sx2, sy2 = surfer_bbox
         s_w = max(1.0, sx2 - sx1)
         s_h = max(1.0, sy2 - sy1)
         s_aspect = s_w / s_h
 
-        # Compute board dimension
+        # Compute board dimension if provided
         if board_mask is not None and len(board_mask) >= 5:
-            # Fit minimum bounding box to mask to get true principal axis length
             rect = cv2_min_area_rect(board_mask)
             b_dim1, b_dim2 = rect[1]
             b_len = max(b_dim1, b_dim2)
-            b_width = min(b_dim1, b_dim2)
         elif board_bbox is not None:
             bx1, by1, bx2, by2 = board_bbox
             b_w = max(1.0, bx2 - bx1)
             b_h = max(1.0, by2 - by1)
-            b_len = np.sqrt(b_w**2 + b_h**2)
-            b_width = min(b_w, b_h)
+            b_len = float(np.sqrt(b_w**2 + b_h**2))
         else:
-            # Approximate board from surfer lower baseline
             b_len = s_h * 1.05
-            b_width = s_w * 0.35
 
-        # Is the surfer in an upright posture? (aspect < 0.85 and standing hint)
         is_upright = (s_aspect < 0.85) or is_standing_hint
 
-        # GUARD: If surfer is still paddling / prone in water (tiny box or not standing),
-        # DO NOT pollute the scale history with an uncalibrated 15-20px prone box!
+        # Guard: If surfer is still paddling / prone in water (tiny box or not standing),
+        # do not pollute the scale history with an uncalibrated prone box
         if not is_standing_hint and s_h < 35.0:
             fallback = self.current_m_per_px or 0.022
             return ScaleEstimate(
@@ -166,82 +85,26 @@ class MetricScaleEstimator:
                 is_upright=False,
             )
 
-        b_aspect = b_width / max(1.0, b_len)
-
-        # Prepare normalized observation vector for VAE
-        ref_norm = 100.0 / s_h
-        feat = np.array([
-            s_w * ref_norm,
-            s_h * ref_norm,
-            s_aspect,
-            b_len * ref_norm,
-            b_width * ref_norm,
-            b_aspect,
-        ], dtype=np.float32)
-
-        feat_tensor = torch.from_numpy(feat).unsqueeze(0).to(self.device)
-
-        with torch.no_grad():
-            mu, logvar = self.vae.encode(feat_tensor)
-            _, pred_logits = self.vae.scale_head(mu).squeeze(0).cpu().numpy()
-
-        confidence = 0.5
-
-        # Bayesian fusion of measurements:
-        candidates = []
-        weights = []
-
-        # Measurement 0: Full Anatomical Skeleton Length (Pose invariant to crouching)
-        if pose is not None and hasattr(pose, "keypoints") and getattr(pose, "confidence", 0.0) > 0.40:
-            kpts = pose.keypoints
-            if kpts.shape[0] >= 17:
-                mid_sh = (kpts[5, :2] + kpts[6, :2]) / 2.0
-                mid_hip = (kpts[11, :2] + kpts[12, :2]) / 2.0
-                l_knee, r_knee = kpts[13, :2], kpts[14, :2]
-                l_ank, r_ank = kpts[15, :2], kpts[16, :2]
-
-                torso = float(np.linalg.norm(mid_sh - mid_hip))
-                legs = float(
-                    np.linalg.norm(kpts[11, :2] - l_knee) + np.linalg.norm(l_knee - l_ank) +
-                    np.linalg.norm(kpts[12, :2] - r_knee) + np.linalg.norm(r_knee - r_ank)
-                ) / 2.0
-                total_skeleton = torso * 1.35 + legs
-                if total_skeleton > 25.0:
-                    scale_skel = self.nominal_surfer_height_m / total_skeleton
-                    candidates.append(scale_skel)
-                    weights.append(0.85)
-                    confidence = max(confidence, 0.90)
-
-        # Measurement 1: Surfer height (effective when upright and sufficiently tall)
+        # In riding posture, effective stance height is ~88% of standing height
         if is_upright and s_h > 25.0:
-            # Stance height accounts for natural riding knee bend (~85% of standing height)
             effective_height_m = self.nominal_surfer_height_m * 0.88
-            scale_surfer = effective_height_m / s_h
-            candidates.append(scale_surfer)
-            weights.append(0.70)
-            confidence = max(confidence, 0.85)
-
-        # Measurement 2: Board length (rigid reference)
-        if b_len > 25.0:
-            scale_board = self.nominal_board_length_m / b_len
-            candidates.append(scale_board)
-            weights.append(0.30 if is_upright else 0.80)
-            confidence = max(confidence, 0.75)
-
-        if len(candidates) > 0:
-            weights = np.array(weights) / sum(weights)
-            measured_scale = float(np.sum(np.array(candidates) * weights))
+            measured_scale = effective_height_m / s_h
+            confidence = 0.85
+        elif b_len > 25.0:
+            measured_scale = self.nominal_board_length_m / b_len
+            confidence = 0.70
         else:
             measured_scale = self.current_m_per_px or 0.022
+            confidence = 0.30
 
-        # Physically plausible clamp [0.010, 0.045] (1.0 cm to 4.5 cm per pixel)
+        # Physical clamping between 0.010 and 0.045 m/pixel (1.0 cm to 4.5 cm per pixel)
         measured_scale = float(np.clip(measured_scale, 0.010, 0.045))
 
-        # Temporal Exponential Moving Average (EMA) smoothing
+        # Temporal EMA smoothing
         if self.current_m_per_px is None:
             self.current_m_per_px = measured_scale
         else:
-            alpha = self.ema_alpha if is_upright else self.ema_alpha * 0.4
+            alpha = self.ema_alpha if is_upright else (self.ema_alpha * 0.4)
             self.current_m_per_px = alpha * measured_scale + (1.0 - alpha) * self.current_m_per_px
 
         self.history_scales.append(self.current_m_per_px)
@@ -252,7 +115,6 @@ class MetricScaleEstimator:
             surfer_height_px=float(s_h),
             board_length_px=float(b_len),
             is_upright=is_upright,
-            latent_z=mu.squeeze(0).cpu().numpy(),
         )
 
 

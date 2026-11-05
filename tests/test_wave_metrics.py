@@ -1,27 +1,15 @@
 """
-Unit tests for JointScaleVAE, MetricScaleEstimator, and WaveSegmentationEngine.
+Unit tests for MetricScaleEstimator and WaveSegmentationEngine.
 Validates metric scale estimation, physical wave height computation, and badge rendering.
 """
 
 import pytest
 import numpy as np
-import torch
 
-from surf_camera.scale_estimator import JointScaleVAE, MetricScaleEstimator, ScaleEstimate
+from surf_camera.scale_estimator import MetricScaleEstimator, ScaleEstimate
 from surf_camera.wave_analyzer import WaveSegmentationEngine, classify_wave_size, WaveMetrics
 from surf_camera.utils import draw_minimalist_badge
 from surf_camera.state_machine import RideEvent
-
-
-def test_joint_scale_vae_forward():
-    vae = JointScaleVAE(input_dim=6, latent_dim=4)
-    x = torch.randn(2, 6)
-    recon, mu, logvar, pred_scale = vae(x)
-
-    assert recon.shape == (2, 6)
-    assert mu.shape == (2, 4)
-    assert logvar.shape == (2, 4)
-    assert pred_scale.shape == (2, 2)
 
 
 def test_metric_scale_estimator():
@@ -37,7 +25,6 @@ def test_metric_scale_estimator():
     assert est.meters_per_pixel > 0.005
     assert est.meters_per_pixel < 0.10
     assert est.is_upright is True
-    assert est.latent_z is not None
 
 
 def test_classify_wave_size():

@@ -125,15 +125,15 @@ current_cfg = load_config()
 @st.cache_resource(show_spinner="⚡ Chargement accéléré des modèles en mémoire vive...")
 def get_cached_pipeline(
     model_name: str,
-    pose_model_name: str,
-    enable_pose: bool,
-    split_mode: str,
     aspect_ratio: str,
     surfer_height_m: float,
     board_length_m: float,
+    enable_pose: bool = False,
+    pose_model_name: str = "yolov8n-pose.pt",
+    split_mode: str = "wide_ptz",
     fast_scan: bool = True,
 ) -> SurfTrackingPipeline:
-    """Loads and retains pre-trained YOLO & Pose models in unified memory (zero reload latency)."""
+    """Loads and retains pre-trained YOLO models in unified memory (zero reload latency)."""
     cfg = PipelineConfig(
         model_name=model_name,
         pose_model_name=pose_model_name,
@@ -144,7 +144,7 @@ def get_cached_pipeline(
         enable_pose_estimation=enable_pose,
         split_mode=split_mode,
         fast_scan=fast_scan,
-        save_split_screen=True,
+        save_split_screen=False,
     )
     return SurfTrackingPipeline(cfg)
 
@@ -153,9 +153,9 @@ def get_cached_pipeline(
 st.markdown("""
 <div class="brand-container">
     <span class="brand-title">🏄 Surf-Camera-Vision</span>
-    <span class="brand-badge">STUDIO v2.0 • BIOMECHANICS & POSE</span>
+    <span class="brand-badge">STUDIO • CAMERAMAN VIRTUEL PTZ</span>
 </div>
-<div class="brand-subtitle">Cameraman virtuel intelligent (Digital PTZ), analyse biomécanique 17 keypoints & classification des figures</div>
+<div class="brand-subtitle">Cameraman virtuel intelligent (Digital PTZ), détection automatique de take-off & métriques physiques de vague</div>
 """, unsafe_allow_html=True)
 
 # --- SIDEBAR CONFIGURATION (ORGANISÉ & REPLIÉ) ---
@@ -282,7 +282,7 @@ with col_save:
                 "zoom_scale": float(zoom_scale),
                 "smoothing_factor": float(smoothing),
                 "lead_room_factor": float(lead_room),
-                "enable_split_screen": True,
+                "enable_split_screen": False,
                 "split_mode": def_split,
             },
             "detection": {
@@ -316,25 +316,13 @@ with col_reset:
 
 
 # --- STEP 1: PARAMÈTRES RAPIDES EN 1 CLIC ---
-col_fmt, col_mode = st.columns(2)
-with col_fmt:
-    aspect_choice = st.radio(
-        "📱 Format Vidéo de Sortie",
-        ["9:16 (Instagram Reels / TikTok)", "16:9 (YouTube / Écran Large)"],
-        index=0 if def_aspect == "9:16" else 1,
-        horizontal=True,
-    )
-    aspect_option = "9:16" if "9:16" in aspect_choice else "16:9"
-
-with col_mode:
-    split_choice = st.radio(
-        "🔬 Mode de Visualisation",
-        ["Laboratoire Biomécanique (Avatar 3D)", "Plan Large Fixe vs PTZ", "Clip Recadré Seul"],
-        index=0 if def_split == "biomechanical" else 1,
-        horizontal=True,
-    )
-    enable_split_screen = ("Clip Recadré Seul" not in split_choice)
-    split_mode = "biomechanical" if "Biomécanique" in split_choice else "wide_ptz"
+aspect_choice = st.radio(
+    "📱 Format Vidéo de Sortie",
+    ["9:16 (Instagram Reels / TikTok)", "16:9 (YouTube / Écran Large)"],
+    index=0 if def_aspect == "9:16" else 1,
+    horizontal=True,
+)
+aspect_option = "9:16" if "9:16" in aspect_choice else "16:9"
 
 # --- WORKSPACE DIRECTORIES ---
 data_dir = Path("data")
@@ -385,18 +373,15 @@ if video_target_path:
         # Get warm cached pipeline with pre-loaded models in Apple Silicon unified memory
         pipeline = get_cached_pipeline(
             model_name=model_name,
-            pose_model_name="yolov8n-pose.pt",
-            enable_pose=enable_pose,
-            split_mode=split_mode,
             aspect_ratio=aspect_option,
             surfer_height_m=surfer_height_m,
             board_length_m=board_length_m,
+            enable_pose=enable_pose,
             fast_scan=True,
         )
         # Apply runtime settings
         pipeline.config.aspect_ratio = aspect_option
-        pipeline.config.split_mode = split_mode
-        pipeline.config.save_split_screen = enable_split_screen
+        pipeline.config.save_split_screen = False
         pipeline.config.zoom_scale = zoom_scale
         pipeline.config.smoothing_factor = smoothing
         pipeline.config.lead_room_factor = lead_room
@@ -458,63 +443,11 @@ if "results" in st.session_state:
         st.metric("Temps Cumulé", f"{total_time:.1f} s")
 
     # Tabs for Outputs
-    tab_split, tab_clips, tab_diag, tab_telemetry = st.tabs([
-        "📺 Studio Double Écran (Original vs Recadré)",
-        "✂️ Clips Recadrés",
+    tab_clips, tab_diag, tab_telemetry = st.tabs([
+        f"✂️ Clips Recadrés ({aspect_selected})",
         "🌐 Vue Panoramique & Diagnostic",
         "📈 Analyse Cinématique & Vagues"
     ])
-
-    with tab_split:
-        split_clips = results.get("split_clips", [])
-        if len(split_clips) == 0:
-            st.info("Aucune vidéo double écran disponible.")
-        else:
-            for idx, split_path in enumerate(split_clips):
-                ride = rides[idx] if idx < len(rides) else None
-                if ride:
-                    wave_str = format_wave_dual_units(ride.wave_height_meters)
-                    wsl_tier = "Poor" if ride.maneuver_score < 2.0 else ("Fair" if ride.maneuver_score < 4.0 else ("Good" if ride.maneuver_score < 6.0 else "Very Good"))
-                    m_badge = f"🔥 {ride.best_maneuver} (WSL: {ride.maneuver_score}/10)" if (ride.best_maneuver and ride.best_maneuver != "Glisse Neutre") else f"Glisse Continue (WSL: {ride.maneuver_score}/10 - {wsl_tier})"
-                    ride_title = f"Vague #{ride.ride_id} — {m_badge} • Pic : {ride.max_speed_kmh:.1f} km/h • Vague : {wave_str} [{ride.wave_category}] • {ride.duration_sec:.1f}s ({ride.direction})"
-                else:
-                    ride_title = f"Ride #{idx+1}"
-
-                st.markdown(f"##### 🌊 {ride_title}")
-                if "biomech" in Path(split_path).name:
-                    st.caption(f"🔬 Studio Biomécanique 1080p : Plan recadré avec squelette néon vs Laboratoire Vectoriel 3D & télémétrie angulaire.")
-                else:
-                    st.caption(f"Comparatif synchronisé 1080p : Plan large fixe plage avec carré PTZ vs Découpage dynamique ({aspect_selected}).")
-
-                if ride and ride.maneuvers_detected:
-                    st.caption("Figures identifiées : " + " • ".join([f"**{m}**" for m in ride.maneuvers_detected]))
-
-                st.video(split_path)
-
-                col_btn_split, col_btn_crop = st.columns(2)
-                with col_btn_split:
-                    with open(split_path, "rb") as f:
-                        st.download_button(
-                            label=f"⬇️ Télécharger Double Écran (1920x1080)",
-                            data=f,
-                            file_name=Path(split_path).name,
-                            mime="video/mp4",
-                            key=f"dl_split_{idx}",
-                            use_container_width=True,
-                        )
-                with col_btn_crop:
-                    if idx < len(results.get("ride_clips", [])):
-                        crop_path = results["ride_clips"][idx]
-                        with open(crop_path, "rb") as f:
-                            st.download_button(
-                                label=f"⬇️ Télécharger Clip Seul ({aspect_selected})",
-                                data=f,
-                                file_name=Path(crop_path).name,
-                                mime="video/mp4",
-                                key=f"dl_crop_split_{idx}",
-                                use_container_width=True,
-                            )
-                st.markdown("---")
 
     with tab_clips:
         if len(results["ride_clips"]) == 0:
@@ -523,17 +456,12 @@ if "results" in st.session_state:
             for idx, clip_path in enumerate(results["ride_clips"]):
                 ride = rides[idx]
                 wave_str = format_wave_dual_units(ride.wave_height_meters)
-                m_lead = f"[{ride.best_maneuver}] " if (ride.best_maneuver and ride.best_maneuver != "Glisse Neutre") else ""
-                st.markdown(f"##### {m_lead}Vague #{ride.ride_id} — Vitesse Pic : `{ride.max_speed_kmh:.1f} km/h` • Vague : `{wave_str}` ({ride.direction})")
+                st.markdown(f"##### Vague #{ride.ride_id} — Vitesse Pic : `{ride.max_speed_kmh:.1f} km/h` • Vague : `{wave_str}` ({ride.direction})")
                 c_vid, c_info = st.columns([2, 1])
                 with c_vid:
                     st.video(clip_path)
                 with c_info:
-                    wsl_tier = "Poor" if ride.maneuver_score < 2.0 else ("Fair" if ride.maneuver_score < 4.0 else ("Good" if ride.maneuver_score < 6.0 else "Very Good"))
-                    m_card = f"- **🏆 Figure Clé :** `{ride.best_maneuver}`\n- **🎯 Note WSL Officielle :** `{ride.maneuver_score}/10` ({wsl_tier})\n"
-                    m_list = ", ".join(ride.maneuvers_detected) if ride.maneuvers_detected else "Glisse Neutre"
                     st.markdown(f"""
-                    {m_card}- **🤸 Figures Détectées :** `{m_list}`
                     - **⚡ Vitesse Max (Pic) :** `{ride.max_speed_kmh:.1f} km/h`
                     - **🏄 Vitesse Moyenne :** `{ride.avg_speed_kmh:.1f} km/h`
                     - **🌊 Hauteur de Vague :** `{wave_str}`
