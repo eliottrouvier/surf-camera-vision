@@ -9,6 +9,7 @@ Handles seamless conversion between:
 Also manages loading, saving, and defaults from config.yaml.
 """
 
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Any, Tuple, Optional
 import re
@@ -16,7 +17,71 @@ import copy
 import yaml
 
 
-# --- UNIT CONVERSION HELPERS ---
+# === CONFIGURATION DATACLASS ===
+
+@dataclass
+class SurfConfig:
+    """Configuration unique et validée de la session d'analyse."""
+    model_type: str = "surf_v2"              # 'surf_v2' (fine-tuné) ou 'coco' (standard)
+    conf_threshold: float = 0.20             # Seuil de confiance détection
+    aspect_ratio: str = "9:16"               # '9:16' (mobile) ou '16:9' (cinématique)
+    surfer_height_m: float = 1.75            # Taille de référence du surfeur (mètres)
+    min_ride_duration_sec: float = 1.5       # Durée minimale pour valider une vague
+    speed_takeoff_thresh: float = 1.8        # Seuil de déclenchement du take-off (px/frame)
+    smoothing_factor: float = 0.12           # Amortissement du cadrage caméra PTZ
+    lead_room_factor: float = 0.35           # Espace d'anticipation dans le sens de la vague
+    tube_safety_zoom_out: float = 0.30       # Élargissement du cadre lors de disparition tube
+    tube_max_memory_sec: float = 2.5         # Persistance du track en occlusion sous lèvre
+
+
+# === MODEL PATH RESOLVER ===
+
+def resolve_model_path(model_type_or_path: str = "surf_v2") -> str:
+    """
+    Resolves weight file path for YOLO models.
+    Supports:
+    - 'surf_v2': fine-tuned marine weights (weights/yolov8n_surf_v2_best.pt)
+    - 'coco': standard COCO weights (yolov8n.pt)
+    - Direct file path (e.g. weights/custom.pt)
+    """
+    root = Path(__file__).resolve().parent.parent
+    clean_key = str(model_type_or_path).strip().lower()
+
+    if clean_key in ("surf_v2", "surf", "marine", "custom"):
+        candidates = [
+            root / "weights" / "yolov8n_surf_v2_best.pt",
+            Path("weights/yolov8n_surf_v2_best.pt"),
+            root / "yolov8n_surf_v2_best.pt",
+        ]
+        for p in candidates:
+            if p.exists():
+                return str(p)
+        coco_p = root / "yolov8n.pt"
+        if coco_p.exists():
+            return str(coco_p)
+        return "yolov8n.pt"
+
+    if clean_key in ("coco", "standard", "default"):
+        coco_candidates = [
+            root / "yolov8n.pt",
+            Path("yolov8n.pt"),
+        ]
+        for p in coco_candidates:
+            if p.exists():
+                return str(p)
+        return "yolov8n.pt"
+
+    direct = Path(model_type_or_path)
+    if direct.exists():
+        return str(direct)
+    rel_root = root / model_type_or_path
+    if rel_root.exists():
+        return str(rel_root)
+
+    return str(model_type_or_path)
+
+
+# === UNIT CONVERSION HELPERS ===
 
 def cm_to_meters(cm: float) -> float:
     """Converts centimeters to meters."""
@@ -98,7 +163,7 @@ def format_wave_dual_units(meters: float) -> str:
     return f"{meters:.2f} m ({feet:.1f} ft)"
 
 
-# --- DEFAULT CONFIGURATION DICTIONARY ---
+# === DEFAULT CONFIGURATION DICTIONARY ===
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "profile_name": "Eliott Session (Huntington Beach)",
@@ -117,12 +182,18 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "lead_room_factor": 0.35,   # Anticipation règle des tiers
         "enable_split_screen": True, # Double écran 1080p
         "split_mode": "biomechanical", # 'biomechanical' (Avatar 3D) ou 'wide_ptz'
+        "tube_safety_zoom_out": 0.30, # Élargissement 25% à 35% en tube
     },
     "detection": {
-        "model_name": "yolov8n-seg.pt",
+        "model_type": "surf_v2",    # 'surf_v2' ou 'coco'
+        "model_name": "weights/yolov8n_surf_v2_best.pt",
         "conf_threshold": 0.20,
         "enable_segmentation": True,
         "enable_hud": True,
+    },
+    "tube_safety": {
+        "max_memory_sec": 2.5,      # Mémoire d'inertie jusqu'à 2.5s (75 frames)
+        "zoom_out": 0.30,           # Zoom-out doux de sécurité
     },
     "pose_estimation": {
         "enable": True,

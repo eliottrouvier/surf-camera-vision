@@ -23,12 +23,15 @@ from .utils import draw_hud, draw_minimalist_badge, draw_neon_skeleton
 @dataclass
 class PipelineConfig:
     """Configuration settings for the Surf Tracking Pipeline."""
-    model_name: str = "weights/yolov8n_surf_v2_best.pt" if Path("weights/yolov8n_surf_v2_best.pt").exists() else "yolov8n-seg.pt"
-    conf_threshold: float = 0.25
+    model_name: str = "weights/yolov8n_surf_v2_best.pt" if Path("weights/yolov8n_surf_v2_best.pt").exists() else "yolov8n.pt"
+    model_type: str = "surf_v2"        # 'surf_v2' or 'coco'
+    conf_threshold: float = 0.20
     aspect_ratio: str = "16:9"         # '16:9' or '9:16'
     zoom_scale: float = 4.5
     smoothing_factor: float = 0.10     # Cameraman smoothing (EMA)
     lead_room_factor: float = 0.35     # Lead-room anticipation
+    tube_safety_zoom_out: float = 0.30 # Progressive 25% to 35% zoom-out during tube occlusion
+    tube_max_memory_sec: float = 2.5   # Trajectory persistence under the lip
     min_ride_duration_sec: float = 1.2
     speed_takeoff_thresh: float = 3.5
     pre_roll_sec: float = 2.0
@@ -52,22 +55,28 @@ class PipelineConfig:
         """Builds PipelineConfig from config.yaml with fallback to defaults."""
         from .config import load_config
         cfg = load_config(path)
+        det_cfg = cfg.get("detection", {})
+        cam_cfg = cfg.get("cameraman", {})
+        tube_cfg = cfg.get("tube_safety", {})
         pose_cfg = cfg.get("pose_estimation", {})
-        split_mode = cfg.get("cameraman", {}).get("split_mode", "wide_ptz")
+        split_mode = cam_cfg.get("split_mode", "wide_ptz")
         return cls(
-            model_name=cfg["detection"]["model_name"],
-            conf_threshold=cfg["detection"]["conf_threshold"],
-            aspect_ratio=cfg["cameraman"]["aspect_ratio"],
-            zoom_scale=cfg["cameraman"]["zoom_scale"],
-            smoothing_factor=cfg["cameraman"]["smoothing_factor"],
-            lead_room_factor=cfg["cameraman"]["lead_room_factor"],
+            model_name=det_cfg.get("model_name", "weights/yolov8n_surf_v2_best.pt"),
+            model_type=det_cfg.get("model_type", "surf_v2"),
+            conf_threshold=det_cfg.get("conf_threshold", 0.20),
+            aspect_ratio=cam_cfg.get("aspect_ratio", "16:9"),
+            zoom_scale=cam_cfg.get("zoom_scale", 4.5),
+            smoothing_factor=cam_cfg.get("smoothing_factor", 0.10),
+            lead_room_factor=cam_cfg.get("lead_room_factor", 0.35),
+            tube_safety_zoom_out=tube_cfg.get("zoom_out", cam_cfg.get("tube_safety_zoom_out", 0.30)),
+            tube_max_memory_sec=tube_cfg.get("max_memory_sec", 2.5),
             min_ride_duration_sec=cfg["state_machine"]["min_ride_duration_sec"],
             speed_takeoff_thresh=cfg["state_machine"]["speed_takeoff_thresh"],
             max_merge_gap_sec=cfg["state_machine"]["max_merge_gap_sec"],
             consolidate_rides=cfg["state_machine"]["consolidate_rides"],
-            render_hud=cfg["detection"]["enable_hud"],
-            render_segmentation=cfg["detection"]["enable_segmentation"],
-            save_split_screen=cfg.get("cameraman", {}).get("enable_split_screen", False),
+            render_hud=det_cfg.get("enable_hud", True),
+            render_segmentation=det_cfg.get("enable_segmentation", True),
+            save_split_screen=cam_cfg.get("enable_split_screen", False),
             surfer_height_m=cfg["surfer"]["height_m"],
             board_length_m=cfg["surfboard"]["length_m"],
             enable_wave_metrics=cfg["wave_metrics"]["enable"],
@@ -88,9 +97,12 @@ class SurfTrackingPipeline:
         self.config = config or PipelineConfig()
         self.detector = SurferDetector(
             model_name=self.config.model_name,
+            model_type=self.config.model_type,
             conf_threshold=self.config.conf_threshold,
         )
-        self.tracker = SurferTracker()
+        self.tracker = SurferTracker(
+            max_tube_lost_frames=int(self.config.tube_max_memory_sec * 30.0),
+        )
         self.scale_estimator = MetricScaleEstimator(
             nominal_surfer_height_m=self.config.surfer_height_m,
             nominal_board_length_m=self.config.board_length_m,
@@ -144,6 +156,7 @@ class SurfTrackingPipeline:
             zoom_scale=self.config.zoom_scale,
             smoothing_factor=self.config.smoothing_factor,
             lead_room_factor=self.config.lead_room_factor,
+            tube_safety_zoom_out=self.config.tube_safety_zoom_out,
         )
 
         # Video writer for full session diagnostic
@@ -170,8 +183,12 @@ class SurfTrackingPipeline:
             # 1. Detection
             detections = self.detector.detect(frame)
 
-            # 2. Tracking
-            active_tracks = self.tracker.update(detections, frame_idx=frame_idx)
+            # 2. Tracking with tube inertia memory
+            riding_ids = {
+                tid for tid, st in (self.state_machine.current_states.items() if self.state_machine else {}.items())
+                if st in (SurferState.RIDING, SurferState.TAKE_OFF)
+            }
+            active_tracks = self.tracker.update(detections, frame_idx=frame_idx, riding_track_ids=riding_ids)
 
             # 3. State Machine Update
             current_states = self.state_machine.update(active_tracks, current_frame=frame_idx)
@@ -195,11 +212,12 @@ class SurfTrackingPipeline:
             current_pose: Optional[SurferPose] = None
 
             if primary_track is not None:
-                cam_box = self.cameraman.update(
-                    surfer_bbox=primary_track.bbox,
-                    surfer_velocity=primary_track.current_velocity,
-                )
                 is_standing = (current_states.get(primary_track.track_id) == SurferState.RIDING)
+                cam_box = self.cameraman.update_with_tube_safety(
+                    surfer_bbox=primary_track.bbox,
+                    last_velocity=primary_track.current_velocity,
+                    is_riding=(current_states.get(primary_track.track_id) in (SurferState.RIDING, SurferState.TAKE_OFF)),
+                )
 
                 if self.pose_estimator is not None and current_states.get(primary_track.track_id) in (SurferState.RIDING, SurferState.TAKE_OFF):
                     current_pose = self.pose_estimator.estimate(frame, primary_track.bbox)
@@ -222,6 +240,13 @@ class SurfTrackingPipeline:
                         direction=direction,
                         meters_per_pixel=current_scale,
                     )
+            else:
+                # Surfer unobserved in current frame: engage tube safety if riding was active
+                was_riding = len(riding_ids) > 0
+                cam_box = self.cameraman.update_with_tube_safety(
+                    surfer_bbox=None,
+                    is_riding=was_riding,
+                )
 
             camera_boxes_history.append(cam_box)
             active_surfer_history.append(primary_track.bbox if primary_track else None)
@@ -348,6 +373,11 @@ class SurfTrackingPipeline:
                     ride.wave_height_feet = 3.3
                     ride.wave_category = classify_wave_size(1.00)
 
+                behaviors = [w.behavior for w in waves if hasattr(w, "behavior") and w.behavior]
+                if behaviors:
+                    from collections import Counter
+                    ride.wave_behavior = Counter(behaviors).most_common(1)[0][0]
+
         # Step 7: Render Cropped Ride Clips
         rendered_clips = []
         if save_ride_clips and len(final_rides) > 0:
@@ -442,6 +472,7 @@ class SurfTrackingPipeline:
                         distance_m=cum_dist,
                         ride_time_sec=time_in_ride,
                         max_speed_kmh=ride.max_speed_kmh,
+                        wave_behavior=ride.wave_behavior,
                     )
 
                 writer.write(crop_resized)

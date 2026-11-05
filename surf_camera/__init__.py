@@ -7,9 +7,16 @@ from .tracker import SurferTracker, Track
 from .state_machine import SurferStateMachine, SurferState, RideEvent
 from .cameraman import VirtualCameraman, CameraBox
 from .scale_estimator import MetricScaleEstimator, ScaleEstimate
-from .wave_analyzer import WaveSegmentationEngine, WaveMetrics, classify_wave_size
+from .wave_analyzer import (
+    WaveSegmentationEngine,
+    WaveMetrics,
+    classify_wave_size,
+    classify_wave_behavior,
+)
 from .pipeline import SurfTrackingPipeline, PipelineConfig
 from .config import (
+    SurfConfig,
+    resolve_model_path,
     load_config,
     save_config,
     cm_to_meters,
@@ -38,8 +45,11 @@ __all__ = [
     "WaveSegmentationEngine",
     "WaveMetrics",
     "classify_wave_size",
+    "classify_wave_behavior",
     "SurfTrackingPipeline",
     "PipelineConfig",
+    "SurfConfig",
+    "resolve_model_path",
     "load_config",
     "save_config",
     "cm_to_meters",

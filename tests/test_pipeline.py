@@ -39,3 +39,31 @@ def test_pipeline_synthetic_execution(tmp_path: Path):
     if len(results["rides"]) > 0:
         assert len(results["ride_clips"]) > 0
         assert Path(results["ride_clips"][0]).exists()
+        assert results["rides"][0].wave_behavior in ("Droite qui ouvre", "Gauche qui ouvre", "Fermeture (Close-out)")
+
+
+def test_pipeline_with_surf_v2_model(tmp_path: Path):
+    """Validates end-to-end execution using the specialized surf_v2 marine model."""
+    video_path = tmp_path / "test_surf_v2.mp4"
+    out_dir = tmp_path / "outputs_v2"
+
+    generate_synthetic_surf_video(video_path, width=640, height=360, num_frames=60, fps=30)
+
+    config = PipelineConfig(
+        model_type="surf_v2",
+        aspect_ratio="9:16",
+        min_ride_duration_sec=0.5,
+        tube_safety_zoom_out=0.30,
+        output_resolution=(640, 360),
+    )
+    pipeline = SurfTrackingPipeline(config)
+
+    results = pipeline.process_video(
+        video_path=str(video_path),
+        output_dir=str(out_dir),
+        save_full_diagnostic=False,
+        save_ride_clips=False,
+    )
+
+    assert results["total_frames"] == 60
+    assert results["fps"] == 30.0

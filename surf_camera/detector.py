@@ -10,6 +10,8 @@ import torch
 import numpy as np
 from ultralytics import YOLO
 
+from .config import resolve_model_path
+
 
 @dataclass
 class Detection:
@@ -49,15 +51,17 @@ class Detection:
 class SurferDetector:
     """
     Detects surfers and boards in panoramic or zoomed surf footage.
-    Supports standard object detection (yolov8n.pt) and instance segmentation (yolov8n-seg.pt).
+    Supports specialized marine model (surf_v2) and standard COCO models (coco).
+    Automatically maps class IDs across single-class and multi-class YOLO weights.
     """
     PERSON_CLASS = 0
     SURFBOARD_CLASS = 37
 
     def __init__(
         self,
-        model_name: str = "yolov8n-seg.pt",
-        conf_threshold: float = 0.25,
+        model_name: Optional[str] = None,
+        model_type: str = "surf_v2",
+        conf_threshold: float = 0.20,
         iou_threshold: float = 0.45,
         device: Optional[str] = None,
         min_box_area: float = 100.0,
@@ -65,6 +69,11 @@ class SurferDetector:
         self.conf_threshold = conf_threshold
         self.iou_threshold = iou_threshold
         self.min_box_area = min_box_area
+        self.model_type = model_type
+
+        # Resolve weight path cleanly based on model_name or model_type
+        target_selector = model_name if model_name is not None else model_type
+        self.model_path = resolve_model_path(target_selector)
 
         if device is None:
             if torch.backends.mps.is_available():
@@ -76,18 +85,47 @@ class SurferDetector:
         else:
             self.device = device
 
-        self.model = YOLO(model_name)
+        self.model = YOLO(self.model_path)
+
+        # Dynamic class identification based on model.names dictionary
+        self.person_class_id = 0
+        self.board_class_id = 37
+
+        if hasattr(self.model, "names") and isinstance(self.model.names, dict):
+            names_dict = self.model.names
+            found_person = None
+            found_board = None
+            for cid, name in names_dict.items():
+                n_str = str(name).strip().lower()
+                if n_str in ("surfer", "person") and found_person is None:
+                    found_person = int(cid)
+                elif "surfboard" in n_str:
+                    found_board = int(cid)
+                elif n_str == "board" and found_board is None:
+                    found_board = int(cid)
+
+            if found_person is not None:
+                self.person_class_id = found_person
+            if found_board is not None:
+                self.board_class_id = found_board
+            elif len(names_dict) == 2 and self.person_class_id == 0:
+                # Custom 2-class dataset (0: surfer, 1: surfboard)
+                self.board_class_id = 1
+
+        self.classes_to_detect = [self.person_class_id]
+        if self.board_class_id is not None and self.board_class_id != self.person_class_id:
+            self.classes_to_detect.append(self.board_class_id)
 
     def detect(self, frame: np.ndarray) -> List[Detection]:
         """
-        Runs object detection & instance segmentation on a single RGB or BGR frame.
+        Runs object detection on a single RGB or BGR frame.
         Associates detected surfboards with adjacent person detections.
         """
         results = self.model.predict(
             source=frame,
             conf=self.conf_threshold,
             iou=self.iou_threshold,
-            classes=[self.PERSON_CLASS, self.SURFBOARD_CLASS],
+            classes=self.classes_to_detect,
             device=self.device,
             verbose=False,
         )
@@ -117,7 +155,7 @@ class SurferDetector:
 
             poly = masks_xy[i] if (masks_xy is not None and i < len(masks_xy)) else None
 
-            if cls_id == self.PERSON_CLASS:
+            if cls_id == self.person_class_id:
                 persons.append(Detection(
                     bbox=(float(x1), float(y1), float(x2), float(y2)),
                     confidence=float(conf),
@@ -125,7 +163,7 @@ class SurferDetector:
                     class_name="surfer",
                     mask=poly,
                 ))
-            elif cls_id == self.SURFBOARD_CLASS:
+            elif cls_id == self.board_class_id:
                 boards.append(((float(x1), float(y1), float(x2), float(y2)), poly))
 
         # Associate surfboards with persons if overlapping or nearby

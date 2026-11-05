@@ -21,6 +21,7 @@ class WaveMetrics:
     trough_y: float
     wave_polygon: Optional[np.ndarray] = None  # (K, 2) contour points in frame coordinates
     confidence: float = 0.8
+    behavior: str = "Droite qui ouvre"  # 'Droite qui ouvre', 'Gauche qui ouvre', 'Fermeture (Close-out)'
 
 
 def classify_wave_size(height_m: float) -> str:
@@ -37,6 +38,30 @@ def classify_wave_size(height_m: float) -> str:
         return "Overhead (6-8ft)"
     else:
         return "Double Overhead (>8ft)"
+
+
+def classify_wave_behavior(
+    direction: str = "RIGHT",
+    foam_uniformity: float = 0.0,
+    lateral_speed_ratio: float = 1.0,
+    is_closeout_hint: bool = False,
+) -> str:
+    """
+    Classifies wave morphological behavior into:
+    - 'Droite qui ouvre' (peeling to the right)
+    - 'Gauche qui ouvre' (peeling to the left)
+    - 'Fermeture (Close-out)' (collapsing all at once without open shoulder)
+    """
+    if is_closeout_hint or (foam_uniformity > 0.80 and lateral_speed_ratio < 0.25):
+        return "Fermeture (Close-out)"
+
+    d = direction.upper().strip()
+    if d == "RIGHT":
+        return "Droite qui ouvre"
+    elif d == "LEFT":
+        return "Gauche qui ouvre"
+    else:
+        return "Fermeture (Close-out)"
 
 
 class WaveSegmentationEngine:
@@ -197,6 +222,13 @@ class WaveSegmentationEngine:
         final_height_ft = float(final_height_m * 3.28084)
         category = classify_wave_size(final_height_m)
 
+        # 6. Evaluate Wave Morphological Behavior (Droite / Gauche / Close-out)
+        behavior = self.evaluate_wave_behavior(
+            frame=frame,
+            direction=direction,
+            roi_bbox=(x_left, y_top, x_right, y_bottom),
+        )
+
         return WaveMetrics(
             height_meters=round(final_height_m, 2),
             height_feet=round(final_height_ft, 1),
@@ -205,6 +237,58 @@ class WaveSegmentationEngine:
             trough_y=float(self.smoothed_trough_y),
             wave_polygon=wave_poly,
             confidence=0.85,
+            behavior=behavior,
+        )
+
+    def evaluate_wave_behavior(
+        self,
+        frame: np.ndarray,
+        direction: str = "RIGHT",
+        roi_bbox: Optional[Tuple[int, int, int, int]] = None,
+    ) -> str:
+        """
+        Morphologically evaluates breaking foam uniformity across horizontal sectors.
+        If breaking foam is distributed uniformly across left, center, and right,
+        the wave is collapsing all at once (Close-out).
+        Otherwise it is peeling open (Droite qui ouvre or Gauche qui ouvre).
+        """
+        if roi_bbox is None:
+            H, W = frame.shape[:2]
+            roi = frame[int(H * 0.2):int(H * 0.7), :]
+        else:
+            rx1, ry1, rx2, ry2 = roi_bbox
+            roi = frame[ry1:ry2, rx1:rx2]
+
+        if roi.size == 0 or roi.shape[0] < 10 or roi.shape[1] < 30:
+            return classify_wave_behavior(direction=direction)
+
+        # White water foam segmentation in HSV
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+        foam = cv2.inRange(hsv, np.array([0, 0, 180]), np.array([180, 70, 255]))
+
+        # Divide into 3 horizontal sectors: Left, Center, Right
+        w_sec = roi.shape[1] // 3
+        s_left = foam[:, :w_sec]
+        s_center = foam[:, w_sec:2*w_sec]
+        s_right = foam[:, 2*w_sec:]
+
+        r_left = float(np.mean(s_left > 0))
+        r_center = float(np.mean(s_center > 0))
+        r_right = float(np.mean(s_right > 0))
+        rates = [r_left, r_center, r_right]
+
+        max_r = max(rates)
+        min_r = min(rates)
+        avg_r = float(np.mean(rates))
+
+        # Close-out criterion: high foam coverage across all 3 sectors simultaneously
+        uniformity = (min_r / max(0.01, max_r)) if max_r > 0.05 else 0.0
+        is_closeout = (uniformity > 0.75 and avg_r > 0.35 and min_r > 0.20)
+
+        return classify_wave_behavior(
+            direction=direction,
+            foam_uniformity=uniformity,
+            is_closeout_hint=is_closeout,
         )
 
     def _fallback_metric(
@@ -213,11 +297,13 @@ class WaveSegmentationEngine:
         meters_per_pixel: float,
         sy1: float,
         sy2: float,
+        direction: str = "RIGHT",
     ) -> WaveMetrics:
         """Robust fallback when water surface has uniform lighting."""
         # Standard average wave face is ~1.15x surfer standing height
         h_px = surfer_height_px * 1.15
         h_m = h_px * meters_per_pixel
+        behavior = classify_wave_behavior(direction=direction)
         return WaveMetrics(
             height_meters=round(h_m, 2),
             height_feet=round(h_m * 3.28084, 1),
@@ -226,4 +312,5 @@ class WaveSegmentationEngine:
             trough_y=sy2 + surfer_height_px * 0.1,
             wave_polygon=None,
             confidence=0.50,
+            behavior=behavior,
         )

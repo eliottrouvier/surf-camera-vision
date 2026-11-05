@@ -28,6 +28,8 @@ class Track:
     confirmed: bool = False
     current_mask: Optional[np.ndarray] = None
     current_board_mask: Optional[np.ndarray] = None
+    is_riding: bool = False
+    is_in_tube: bool = False
 
     @property
     def center(self) -> Tuple[float, float]:
@@ -84,16 +86,19 @@ def compute_iou(box1: Tuple[float, float, float, float], box2: Tuple[float, floa
 class SurferTracker:
     """
     Spatio-temporal tracker designed for ocean dynamics.
-    Handles scale variations and occlusions caused by wave crests and foam.
+    Handles scale variations, wave spray, and extended tube occlusions
+    by maintaining trajectory inertia under the breaking lip.
     """
     def __init__(
         self,
         max_lost_frames: int = 25,
+        max_tube_lost_frames: int = 75,  # ~2.5 seconds at 30 fps for tube survival
         min_hits_to_confirm: int = 3,
         iou_match_thresh: float = 0.25,
         max_center_dist_ratio: float = 2.5,
     ):
         self.max_lost_frames = max_lost_frames
+        self.max_tube_lost_frames = max_tube_lost_frames
         self.min_hits_to_confirm = min_hits_to_confirm
         self.iou_match_thresh = iou_match_thresh
         self.max_center_dist_ratio = max_center_dist_ratio
@@ -101,21 +106,43 @@ class SurferTracker:
         self.tracks: Dict[int, Track] = {}
         self._next_id: int = 1
 
-    def update(self, detections: List[Detection], frame_idx: int) -> List[Track]:
+    def update(
+        self,
+        detections: List[Detection],
+        frame_idx: int,
+        riding_track_ids: Optional[set] = None,
+    ) -> List[Track]:
         """
         Updates the active tracks with new detections at the given frame index.
+        Maintains inertial trajectory projection for tracks riding under the lip.
         Returns the list of currently active confirmed tracks.
         """
-        # Step 1: Predict new track positions based on velocity
+        # Flag riding status on known tracks
+        if riding_track_ids:
+            for tid in riding_track_ids:
+                if tid in self.tracks:
+                    self.tracks[tid].is_riding = True
+
+        # Step 1: Predict new track positions based on velocity and inertia
         active_track_ids = list(self.tracks.keys())
         predicted_boxes = {}
         for tid in active_track_ids:
             track = self.tracks[tid]
             vx, vy = track.current_velocity
             x1, y1, x2, y2 = track.bbox
-            predicted_boxes[tid] = (x1 + vx, y1 + vy, x2 + vx, y2 + vy)
 
-        # Step 2: Build Cost Matrix (combining IoU and center distance)
+            if track.lost_frames > 0 and track.is_riding:
+                # Maintain directional inertial projection under the lip
+                decay = max(0.40, 0.98 ** track.lost_frames)
+                pvx = vx * decay
+                pvy = vy * decay
+            else:
+                pvx = vx
+                pvy = vy
+
+            predicted_boxes[tid] = (x1 + pvx, y1 + pvy, x2 + pvx, y2 + pvy)
+
+        # Step 2: Build Cost Matrix (combining IoU, center distance, and tube expansion)
         matched_tracks = set()
         matched_dets = set()
 
@@ -127,15 +154,21 @@ class SurferTracker:
                 pred_box = predicted_boxes[tid]
                 for j, det in enumerate(detections):
                     iou = compute_iou(pred_box, det.bbox)
-                    # Normalized center distance
                     tcx, tcy = (pred_box[0] + pred_box[2]) / 2.0, (pred_box[1] + pred_box[3]) / 2.0
                     dcx, dcy = det.center
                     dist = np.sqrt((tcx - dcx)**2 + (tcy - dcy)**2)
-                    max_allowed = max(track.width, track.height) * self.max_center_dist_ratio
+
+                    # Expand matching window if recovering from occlusion
+                    expansion = 0.15 * min(40, track.lost_frames) if track.lost_frames > 0 else 0.0
+                    max_allowed = max(track.width, track.height) * (self.max_center_dist_ratio + expansion)
                     dist_score = min(1.0, dist / max(1.0, max_allowed))
 
-                    # Cost is low when IoU is high and distance is low
-                    cost = (1.0 - iou) * 0.7 + dist_score * 0.3
+                    if iou > 0.0:
+                        cost = (1.0 - iou) * 0.70 + dist_score * 0.30
+                    else:
+                        # Spatial alignment with predicted inertial trajectory
+                        cost = 0.30 + dist_score * 0.40 if dist_score < 0.75 else 1.0
+
                     cost_matrix[i, j] = cost
 
             row_ind, col_ind = linear_sum_assignment(cost_matrix)
@@ -147,25 +180,30 @@ class SurferTracker:
                     matched_dets.add(c)
                     self._update_track(self.tracks[tid], detections[c], frame_idx)
 
-        # Step 3: Handle unmatched active tracks (increment lost_frames)
+        # Step 3: Handle unmatched active tracks (increment lost_frames and project inertia)
         for tid in active_track_ids:
             if tid not in matched_tracks:
                 track = self.tracks[tid]
                 track.lost_frames += 1
-                # Forward project bounding box slightly
                 vx, vy = track.current_velocity
                 x1, y1, x2, y2 = track.bbox
-                track.bbox = (x1 + vx * 0.5, y1 + vy * 0.5, x2 + vx * 0.5, y2 + vy * 0.5)
+
+                if track.is_riding:
+                    track.is_in_tube = True
+                    decay = max(0.40, 0.98 ** track.lost_frames)
+                    track.bbox = (x1 + vx * decay, y1 + vy * decay, x2 + vx * decay, y2 + vy * decay)
+                else:
+                    track.bbox = (x1 + vx * 0.5, y1 + vy * 0.5, x2 + vx * 0.5, y2 + vy * 0.5)
 
         # Step 4: Create new tracks for unmatched detections
         for j, det in enumerate(detections):
             if j not in matched_dets:
                 self._create_track(det, frame_idx)
 
-        # Step 5: Remove dead tracks
+        # Step 5: Remove dead tracks based on tube tolerance
         dead_ids = [
             tid for tid, track in self.tracks.items()
-            if track.lost_frames > self.max_lost_frames
+            if track.lost_frames > (self.max_tube_lost_frames if track.is_riding else self.max_lost_frames)
         ]
         for tid in dead_ids:
             del self.tracks[tid]
@@ -198,6 +236,7 @@ class SurferTracker:
         track.velocities.append((vx, vy))
         track.hits += 1
         track.lost_frames = 0
+        track.is_in_tube = False
         track.current_mask = det.mask
         track.current_board_mask = det.board_mask
 

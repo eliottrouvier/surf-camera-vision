@@ -51,6 +51,7 @@ class VirtualCameraman:
         smoothing_factor: float = 0.10,  # EMA smoothing (0.05 = super smooth/slow, 0.20 = responsive)
         lead_room_factor: float = 0.35,  # Shift factor along wave direction (0.0 = centered, 0.4 = rule of thirds)
         min_crop_dim_ratio: float = 0.25,# Minimum crop size relative to source frame
+        tube_safety_zoom_out: float = 0.30, # Safe progressive expansion (25% to 35%) when in tube
     ):
         self.frame_width = frame_width
         self.frame_height = frame_height
@@ -59,6 +60,14 @@ class VirtualCameraman:
         self.smoothing_factor = smoothing_factor
         self.lead_room_factor = lead_room_factor
         self.min_crop_dim_ratio = min_crop_dim_ratio
+        self.tube_safety_zoom_out = tube_safety_zoom_out
+
+        # Tube safety mode state
+        self.is_in_tube_safety: bool = False
+        self.tube_frames_counter: int = 0
+        self.tube_zoom_factor: float = 1.0
+        self.last_known_bbox: Optional[Tuple[float, float, float, float]] = None
+        self.last_velocity: Tuple[float, float] = (0.0, 0.0)
 
         # Determine target aspect ratio (width / height)
         if aspect_ratio == "9:16":
@@ -80,30 +89,115 @@ class VirtualCameraman:
         self.curr_cy = None
         self.curr_cw = None
         self.curr_ch = None
+        self.is_in_tube_safety = False
+        self.tube_frames_counter = 0
+        self.tube_zoom_factor = 1.0
+        self.last_known_bbox = None
+        self.last_velocity = (0.0, 0.0)
 
     def update(
         self,
-        surfer_bbox: Tuple[float, float, float, float],
+        surfer_bbox: Optional[Tuple[float, float, float, float]] = None,
         surfer_velocity: Tuple[float, float] = (0.0, 0.0),
     ) -> CameraBox:
         """
         Calculates the optimal smoothed crop window for the current surfer position.
+        Delegates to update_with_tube_safety.
         """
-        sx1, sy1, sx2, sy2 = surfer_bbox
-        scx = (sx1 + sx2) / 2.0
-        scy = (sy1 + sy2) / 2.0
-        sw = max(20.0, sx2 - sx1)
-        sh = max(20.0, sy2 - sy1)
-        vx, vy = surfer_velocity
+        return self.update_with_tube_safety(
+            surfer_bbox=surfer_bbox,
+            last_velocity=surfer_velocity,
+            is_riding=True,
+        )
 
-        # 1. Determine raw target crop dimensions based on surfer size and aspect ratio
-        base_size = max(sw, sh) * self.zoom_scale
+    def update_with_tube_safety(
+        self,
+        surfer_bbox: Optional[Tuple[float, float, float, float]] = None,
+        last_velocity: Tuple[float, float] = (0.0, 0.0),
+        is_riding: bool = False,
+    ) -> CameraBox:
+        """
+        Smart PTZ framing with tube safety recovery:
+        1. When surfer is visible:
+           - Follows surfer with smooth damping and lead-room anticipation.
+           - Smoothly tightens frame back from any previous tube zoom-out.
+        2. When surfer disappears in active ride (tube occlusion):
+           - Maintains forward tracking velocity in wave glide direction.
+           - Smoothly widens frame by 25% to 35% to encompass the tube exit (spit).
+           - Resumes precise framing upon surfer re-emergence.
+        """
+        if surfer_bbox is not None:
+            # Surfer is visible
+            sx1, sy1, sx2, sy2 = surfer_bbox
+            self.last_known_bbox = surfer_bbox
+
+            if abs(last_velocity[0]) > 0.01 or abs(last_velocity[1]) > 0.01:
+                self.last_velocity = last_velocity
+
+            # If recovering from tube, smoothly ease zoom back to 1.0
+            if self.is_in_tube_safety:
+                self.is_in_tube_safety = False
+                self.tube_frames_counter = 0
+
+            if self.tube_zoom_factor > 1.005:
+                self.tube_zoom_factor = (
+                    (1.0 - self.smoothing_factor) * self.tube_zoom_factor + self.smoothing_factor * 1.0
+                )
+            else:
+                self.tube_zoom_factor = 1.0
+
+            scx = (sx1 + sx2) / 2.0
+            scy = (sy1 + sy2) / 2.0
+            sw = max(20.0, sx2 - sx1)
+            sh = max(20.0, sy2 - sy1)
+            vx, vy = self.last_velocity
+
+        elif is_riding and self.last_known_bbox is not None:
+            # Surfer hidden under lip in active ride: Tube Safety Zoom-Out
+            self.is_in_tube_safety = True
+            self.tube_frames_counter += 1
+
+            # Progressively expand zoom factor towards 1.0 + tube_safety_zoom_out (e.g. 1.30)
+            target_tube_factor = 1.0 + self.tube_safety_zoom_out
+            alpha_zoom = min(0.15, self.smoothing_factor * 1.5)
+            self.tube_zoom_factor = (
+                (1.0 - alpha_zoom) * self.tube_zoom_factor + alpha_zoom * target_tube_factor
+            )
+
+            vx, vy = last_velocity if (abs(last_velocity[0]) > 0.01 or abs(last_velocity[1]) > 0.01) else self.last_velocity
+            sx1, sy1, sx2, sy2 = self.last_known_bbox
+
+            # Project forward motion with gentle inertia decay
+            decay = max(0.50, 0.98 ** min(60, self.tube_frames_counter))
+            fwd_x = vx * decay
+            fwd_y = vy * decay
+
+            new_sx1 = sx1 + fwd_x
+            new_sy1 = sy1 + fwd_y
+            new_sx2 = sx2 + fwd_x
+            new_sy2 = sy2 + fwd_y
+            self.last_known_bbox = (new_sx1, new_sy1, new_sx2, new_sy2)
+
+            scx = (new_sx1 + new_sx2) / 2.0
+            scy = (new_sy1 + new_sy2) / 2.0
+            sw = max(20.0, new_sx2 - new_sx1)
+            sh = max(20.0, new_sy2 - new_sy1)
+
+        else:
+            # Surfer not riding or no prior bbox: fallback to center of frame
+            scx = float(self.frame_width) / 2.0
+            scy = float(self.frame_height) / 2.0
+            sw = 40.0
+            sh = 80.0
+            vx, vy = (0.0, 0.0)
+
+        # 1. Determine raw target crop dimensions including tube zoom factor
+        base_size = max(sw, sh) * self.zoom_scale * self.tube_zoom_factor
 
         if self.target_ar >= 1.0:
             # Landscape (16:9)
             target_ch = max(self.frame_height * self.min_crop_dim_ratio, base_size)
             target_cw = target_ch * self.target_ar
-            # Clamp if exceeding frame width
             if target_cw > self.frame_width:
                 target_cw = float(self.frame_width)
                 target_ch = target_cw / self.target_ar
@@ -111,14 +205,11 @@ class VirtualCameraman:
             # Vertical (9:16)
             target_cw = max(self.frame_width * self.min_crop_dim_ratio, base_size)
             target_ch = target_cw / self.target_ar
-            # Clamp if exceeding frame height
             if target_ch > self.frame_height:
                 target_ch = float(self.frame_height)
                 target_cw = target_ch * self.target_ar
 
-        # 2. Compute Lead Room: shift the camera ahead of the surfer in their motion direction
-        # vx > 0 -> surfer going right -> shift camera to the right so surfer is in the left 1/3
-        # vx < 0 -> surfer going left -> shift camera to the left so surfer is in the right 1/3
+        # 2. Compute Lead Room: shift camera forward in motion direction
         speed = np.sqrt(vx**2 + vy**2)
         lead_offset_x = 0.0
         lead_offset_y = 0.0
@@ -127,7 +218,6 @@ class VirtualCameraman:
             dir_x = vx / speed
             dir_y = vy / speed
             lead_offset_x = dir_x * (target_cw * self.lead_room_factor)
-            # Slight vertical lookahead if riding down the face
             lead_offset_y = dir_y * (target_ch * (self.lead_room_factor * 0.4))
 
         target_cx = scx + lead_offset_x
@@ -135,7 +225,6 @@ class VirtualCameraman:
 
         # 3. Apply Smooth Damping (EMA filter)
         if self.curr_cx is None:
-            # First frame of the shot
             self.curr_cx = target_cx
             self.curr_cy = target_cy
             self.curr_cw = target_cw

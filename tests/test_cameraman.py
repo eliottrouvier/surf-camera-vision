@@ -66,3 +66,72 @@ def test_smoothing_damping():
     c2 = box2.center[0]
     # Center shift should be smoothed (around 10% of 200px = ~20px, not 200px)
     assert abs(c2 - c1) < 40.0
+
+
+def test_tube_safety_zoom_out():
+    """
+    Validates the tube safety mode:
+    1. Surfer rides rightward and is smoothly framed.
+    2. Surfer disappears into the barrel (surfer_bbox=None, is_riding=True).
+    3. Cameraman maintains forward motion in glide direction and widens frame by 25% to 35%.
+    4. Surfer re-emerges at spit: cameraman tightens frame back smoothly.
+    """
+    cam = VirtualCameraman(
+        frame_width=1920,
+        frame_height=1080,
+        aspect_ratio="16:9",
+        zoom_scale=4.5,
+        smoothing_factor=0.15,
+        tube_safety_zoom_out=0.30,  # 30% enlargement
+    )
+
+    # 1. Visible surfer riding rightward
+    start_x, start_y = 500.0, 500.0
+    vx, vy = 8.0, 0.5
+    for f in range(15):
+        box_init = cam.update_with_tube_safety(
+            surfer_bbox=(start_x + f * vx, start_y, start_x + f * vx + 30.0, start_y + 70.0),
+            last_velocity=(vx, vy),
+            is_riding=True,
+        )
+
+    w_initial = box_init.width
+    cx_initial = box_init.center[0]
+    assert cam.is_in_tube_safety is False
+
+    # 2. Surfer enters the tube (occlusion under lip)
+    for f in range(25):
+        box_tube = cam.update_with_tube_safety(
+            surfer_bbox=None,
+            last_velocity=(vx, vy),
+            is_riding=True,
+        )
+
+    # Verify tube mode was engaged
+    assert cam.is_in_tube_safety is True
+    assert cam.tube_frames_counter == 25
+    assert cam.tube_zoom_factor > 1.20
+
+    # Verify smooth zoom-out: crop box expanded by 20% to 35%
+    assert box_tube.width >= w_initial * 1.15
+    # Verify forward tracking: camera continued moving rightwards in the glide direction
+    assert box_tube.center[0] > cx_initial
+
+    # 3. Surfer re-emerges at spit
+    exit_x = start_x + 40 * vx
+    box_exit = cam.update_with_tube_safety(
+        surfer_bbox=(exit_x, start_y, exit_x + 30.0, start_y + 70.0),
+        last_velocity=(vx, vy),
+        is_riding=True,
+    )
+    assert cam.is_in_tube_safety is False
+
+    # Continue riding for 15 frames: frame should smoothly tighten back
+    for f in range(15):
+        box_tight = cam.update_with_tube_safety(
+            surfer_bbox=(exit_x + f * vx, start_y, exit_x + f * vx + 30.0, start_y + 70.0),
+            last_velocity=(vx, vy),
+            is_riding=True,
+        )
+
+    assert box_tight.width < box_tube.width

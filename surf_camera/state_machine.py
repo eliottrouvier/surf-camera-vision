@@ -33,6 +33,7 @@ class RideEvent:
     max_speed_px: float
     direction: str            # 'RIGHT' (frontside/backside right) or 'LEFT'
     trajectory: List[Tuple[float, float, int]]  # [(cx, cy, frame_idx), ...]
+    wave_behavior: str = "Droite qui ouvre"  # 'Droite qui ouvre', 'Gauche qui ouvre', 'Fermeture (Close-out)'
     max_speed_kmh: float = 0.0
     avg_speed_kmh: float = 0.0
     distance_meters: float = 0.0
@@ -180,6 +181,13 @@ class SurferStateMachine:
             duration_frames = end_frame - start_frame
             duration_sec = duration_frames / self.fps
 
+            if end_state == SurferState.WIPEOUT and active_duration_frames < int(self.fps * 1.5) and abs(avg_dx) < 1.0:
+                wave_behavior = "Fermeture (Close-out)"
+            elif direction == "RIGHT":
+                wave_behavior = "Droite qui ouvre"
+            else:
+                wave_behavior = "Gauche qui ouvre"
+
             event = RideEvent(
                 ride_id=self._next_ride_id,
                 surfer_id=track_id,
@@ -191,6 +199,7 @@ class SurferStateMachine:
                 max_speed_px=max_speed,
                 direction=direction,
                 trajectory=ride_data["trajectory"],
+                wave_behavior=wave_behavior,
             )
             self._next_ride_id += 1
             self.completed_rides.append(event)
@@ -223,8 +232,13 @@ class SurferStateMachine:
                 merged_dur_frames = merged_end - merged_start
                 merged_dur_sec = merged_dur_frames / self.fps
                 merged_max_speed = max(current.max_speed_px, next_ride.max_speed_px)
-                # Keep direction of the longer segment
-                direction = current.direction if current.duration_frames >= next_ride.duration_frames else next_ride.direction
+                # Keep direction and behavior of the longer segment
+                if current.duration_frames >= next_ride.duration_frames:
+                    direction = current.direction
+                    merged_behavior = current.wave_behavior
+                else:
+                    direction = next_ride.direction
+                    merged_behavior = next_ride.wave_behavior
 
                 merged_max_kmh = max(current.max_speed_kmh, next_ride.max_speed_kmh)
                 merged_dist = current.distance_meters + next_ride.distance_meters
@@ -253,6 +267,7 @@ class SurferStateMachine:
                     max_speed_px=merged_max_speed,
                     direction=direction,
                     trajectory=current.trajectory + next_ride.trajectory,
+                    wave_behavior=merged_behavior,
                     max_speed_kmh=round(merged_max_kmh, 1),
                     avg_speed_kmh=round(merged_avg_kmh, 1),
                     distance_meters=round(merged_dist, 1),
