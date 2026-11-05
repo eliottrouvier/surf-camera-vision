@@ -1,32 +1,21 @@
 """
-Surf-Camera-Vision: Minimalist Studio Web Application.
-Upload or load surf videos, configure virtual cameraman framing,
-and review/export automated cinematic ride cuts with instance segmentation.
-Supports persistent configuration (config.yaml), custom surfer/board presets,
-and dual unit metrics (km/h, meters & feet).
+Surf-Camera-Vision: Studio Web Épuré.
+Cameraman virtuel autonome (Digital PTZ), détection automatique de take-off,
+qualification du déferlement et télémétrie physique de glisse.
 """
 
 from pathlib import Path
 import time
 import streamlit as st
-import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 
 from surf_camera.pipeline import SurfTrackingPipeline, PipelineConfig
-from surf_camera.utils import download_or_generate_sample_video, STATE_COLORS
-from surf_camera.state_machine import SurferState
 from surf_camera.config import (
-    load_config,
-    save_config,
-    cm_to_meters,
-    meters_to_cm,
-    parse_ft_in,
+    resolve_model_path,
     format_ft_in,
-    format_surfer_height,
     format_wave_dual_units,
-    PRESETS,
-    DEFAULT_CONFIG,
+    meters_to_feet,
 )
 
 
@@ -37,21 +26,20 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# --- MINIMALIST STUDIO CSS (Linear / Apple Dark Theme) ---
+# Style CSS épuré et moderne (Studio Dark Theme)
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
-    
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
     html, body, [class*="css"] {
         font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
     }
-    
+
     .stApp {
         background-color: #090c10;
         color: #e6edf3;
     }
-    
-    /* Header minimalist */
+
     .brand-container {
         display: flex;
         align-items: center;
@@ -60,7 +48,7 @@ st.markdown("""
         padding-top: 4px;
     }
     .brand-title {
-        font-size: 1.6rem;
+        font-size: 1.65rem;
         font-weight: 700;
         letter-spacing: -0.02em;
         color: #ffffff;
@@ -78,19 +66,9 @@ st.markdown("""
     .brand-subtitle {
         color: #8b949e;
         font-size: 0.92rem;
-        margin-bottom: 1.8rem;
+        margin-bottom: 1.5rem;
     }
-    
-    /* Clean Cards */
-    .studio-card {
-        background-color: #0d1117;
-        border: 1px solid #21262d;
-        border-radius: 8px;
-        padding: 16px 20px;
-        margin-bottom: 14px;
-    }
-    
-    /* Metric Card */
+
     div[data-testid="stMetric"] {
         background-color: #0d1117;
         border: 1px solid #21262d;
@@ -107,240 +85,117 @@ st.markdown("""
         font-family: 'JetBrains Mono', monospace !important;
         font-size: 1.35rem !important;
     }
-    
-    /* Buttons */
+
     .stButton>button {
         border-radius: 6px;
-        font-weight: 500;
-        font-size: 0.9rem;
+        font-weight: 600;
+        font-size: 0.92rem;
         transition: all 0.15s ease-in-out;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# --- LOAD CURRENT PERSISTENT CONFIGURATION ---
-current_cfg = load_config()
 
-# --- MODEL & PIPELINE CACHING (APPLE SILICON GPU) ---
-@st.cache_resource(show_spinner="⚡ Chargement accéléré des modèles en mémoire vive...")
+@st.cache_resource(show_spinner="⚡ Chargement accéléré du modèle IA...")
 def get_cached_pipeline(
-    model_name: str,
+    model_type: str,
     aspect_ratio: str,
     surfer_height_m: float,
-    board_length_m: float,
-    enable_pose: bool = False,
-    pose_model_name: str = "yolov8n-pose.pt",
-    split_mode: str = "wide_ptz",
-    fast_scan: bool = True,
+    min_ride_duration_sec: float,
 ) -> SurfTrackingPipeline:
-    """Loads and retains pre-trained YOLO models in unified memory (zero reload latency)."""
+    """Maintient les modèles pré-chargés en mémoire vive unifiée."""
     cfg = PipelineConfig(
-        model_name=model_name,
-        pose_model_name=pose_model_name,
+        model_name=resolve_model_path(model_type),
+        model_type=model_type,
         conf_threshold=0.20,
         aspect_ratio=aspect_ratio,
         surfer_height_m=surfer_height_m,
-        board_length_m=board_length_m,
-        enable_pose_estimation=enable_pose,
-        split_mode=split_mode,
-        fast_scan=fast_scan,
+        min_ride_duration_sec=min_ride_duration_sec,
+        enable_pose_estimation=False,
         save_split_screen=False,
+        fast_scan=True,
     )
     return SurfTrackingPipeline(cfg)
 
 
-# --- HEADER ---
+# Barre latérale de réglages épurée
+st.sidebar.markdown("### ⚙️ Réglages Cameraman")
+
+# 1. Sélecteur de modèle
+model_options = [
+    "Modèle Dédié Surf Marin (yolov8n_surf_v2_best.pt)",
+    "Modèle Standard COCO (yolov8n.pt)",
+]
+model_choice = st.sidebar.selectbox(
+    "Modèle de Détection IA",
+    model_options,
+    index=0,
+    help="Modèle dédié fine-tuné sur conditions réelles marines vs modèle standard COCO.",
+)
+model_type = "surf_v2" if "Surf Marin" in model_choice else "coco"
+
+# 2. Sélecteur de format
+format_options = [
+    "📱 9:16 Vertical Mobile (Reels / TikTok)",
+    "🖥️ 16:9 Cinématique",
+]
+format_choice = st.sidebar.radio(
+    "Format Cadrage Virtuel",
+    format_options,
+    index=0,
+    help="Format de recadrage automatique généré par l'Auto-Cameraman.",
+)
+aspect_ratio = "9:16" if "9:16" in format_choice else "16:9"
+
+# 3. Slider morphologique : Taille du surfeur (1.50 m à 2.05 m, défaut 1.75 m)
+surfer_height_m = st.sidebar.slider(
+    "Taille du surfeur (m)",
+    min_value=1.50,
+    max_value=2.05,
+    value=1.75,
+    step=0.01,
+    help="Taille réelle du surfeur servant à étalonner l'échelle métrique absolue.",
+)
+st.sidebar.caption(f"📏 Calibrage : **{surfer_height_m:.2f} m** ({format_ft_in(surfer_height_m)})")
+
+# 4. Durée minimale de vague (slider 1.5s à 5.0s, défaut 1.5s)
+min_ride_duration_sec = st.sidebar.slider(
+    "Durée minimale de vague (s)",
+    min_value=1.5,
+    max_value=5.0,
+    value=1.5,
+    step=0.1,
+    help="Durée active minimale requise pour valider un ride et exporter le clip recadré.",
+)
+
+# En-tête de la page principale
 st.markdown("""
 <div class="brand-container">
     <span class="brand-title">🏄 Surf-Camera-Vision</span>
-    <span class="brand-badge">STUDIO • CAMERAMAN VIRTUEL PTZ</span>
+    <span class="brand-badge">STUDIO • AUTO-CAMERAMAN PTZ</span>
 </div>
-<div class="brand-subtitle">Cameraman virtuel intelligent (Digital PTZ), détection automatique de take-off & métriques physiques de vague</div>
+<div class="brand-subtitle">
+    Cameraman virtuel intelligent, détection automatique de take-off & métriques physiques de vague
+</div>
 """, unsafe_allow_html=True)
 
-# --- SIDEBAR CONFIGURATION (ORGANISÉ & REPLIÉ) ---
-st.sidebar.markdown("### ⚙️ Profil & Paramètres Avancés")
-
-# 1. Preset Selector
-preset_names = ["Personnalisé / Actuel"] + list(PRESETS.keys())
-selected_preset = st.sidebar.selectbox("Profil de Session", preset_names, index=0)
-
-# Apply preset if selected
-if selected_preset != "Personnalisé / Actuel":
-    p_data = PRESETS[selected_preset]
-    def_surfer_cm = p_data.get("surfer_height_cm", 185.0)
-    def_board_str = p_data.get("board_length_ft_in", "5'8\"")
-    def_aspect = p_data.get("aspect_ratio", "9:16")
-    def_zoom = p_data.get("zoom_scale", 4.0)
-    def_lead = p_data.get("lead_room_factor", 0.35)
-    def_smooth = p_data.get("smoothing_factor", 0.10)
-    def_split = current_cfg.get("cameraman", {}).get("split_mode", "biomechanical")
-else:
-    def_surfer_cm = current_cfg["surfer"].get("height_cm", 185.0)
-    def_board_str = current_cfg["surfboard"].get("length_ft_in", "5'8\"")
-    def_aspect = current_cfg["cameraman"].get("aspect_ratio", "9:16")
-    def_zoom = current_cfg["cameraman"].get("zoom_scale", 4.0)
-    def_lead = current_cfg["cameraman"].get("lead_room_factor", 0.35)
-    def_smooth = current_cfg["cameraman"].get("smoothing_factor", 0.10)
-    def_split = current_cfg.get("cameraman", {}).get("split_mode", "biomechanical")
-
-with st.sidebar.expander("🌊 Dimensions Surfeur & Planche", expanded=False):
-    surfer_height_cm = st.slider(
-        "Taille du surfeur (cm)",
-        min_value=145,
-        max_value=210,
-        value=int(round(def_surfer_cm)),
-        step=1,
-        help="Utilisé par le VAE pour calibrer l'échelle métrique réelle (ex: 185 cm = 6'1\")."
-    )
-    surfer_height_m = cm_to_meters(surfer_height_cm)
-    st.caption(f"📏 Équivalent : **{format_surfer_height(surfer_height_cm)}**")
-
-    BOARD_SIZES = [
-        "5'4\"", "5'6\"", "5'8\"", "5'10\"", "6'0\"", "6'2\"",
-        "6'4\"", "6'6\"", "6'8\"", "7'0\"", "7'2\"", "7'6\"",
-        "8'0\"", "8'6\"", "9'0\"", "9'2\"", "9'6\""
-    ]
-    board_idx = BOARD_SIZES.index(def_board_str) if def_board_str in BOARD_SIZES else 2
-    board_choice = st.selectbox(
-        "Taille de planche (ft / in)",
-        options=BOARD_SIZES,
-        index=board_idx,
-        help="Longueur de planche (standard mondial du surf, ex: 5'8\" = 1.73 m)."
-    )
-    board_length_m = parse_ft_in(board_choice)
-    st.caption(f"🏄 Longueur réelle : **{board_length_m:.2f} m** ({board_choice})")
-
-    enable_wave_metrics = st.toggle("Activer télémétrie & segmentation de vague", value=True)
-
-with st.sidebar.expander("🎥 Cadrage Virtuel PTZ", expanded=False):
-    zoom_scale = st.slider(
-        "Facteur de zoom virtuel",
-        min_value=2.0,
-        max_value=6.5,
-        value=float(def_zoom),
-        step=0.5,
-        help="Échelle du zoom virtuel par rapport à la taille du surfeur."
-    )
-    lead_room = st.slider(
-        "Anticipation Lead-Room",
-        min_value=0.10,
-        max_value=0.50,
-        value=float(def_lead),
-        step=0.05,
-        help="Décalage cinématique dans le sens du déferlement (règle des tiers)."
-    )
-    smoothing = st.slider(
-        "Amorti cinématique (EMA)",
-        min_value=0.04,
-        max_value=0.25,
-        value=float(def_smooth),
-        step=0.01,
-        help="Inertie de la rotule fluide. Valeur basse = suivi ultra-doux sans tremblement."
-    )
-
-with st.sidebar.expander("🎯 Détection IA & Pose", expanded=False):
-    model_options = [
-        "weights/yolov8n_surf_v2_best.pt (Modèle Spécialisé Surf v2)",
-        "yolov8n-seg.pt (Instance Segmentation COCO)",
-        "yolov8n.pt (Boîtes seules)",
-    ]
-    ft_weights = Path("weights/yolov8n_surf_v2_best.pt")
-    if not ft_weights.exists():
-        model_options.pop(0)
-
-    model_choice = st.selectbox("Modèle YOLO Détection", options=model_options, index=0)
-    model_name = "weights/yolov8n_surf_v2_best.pt" if "Surf v2" in model_choice else ("yolov8n-seg.pt" if "seg" in model_choice else "yolov8n.pt")
-    enable_pose = st.toggle("🔬 Estimation de Pose Articulaire (17 Keypoints)", value=True, help="Active YOLOv8-Pose sur le surfeur pour extraire les angles de genoux, compression et inclinaison.")
-    enable_segmentation = st.toggle("Masques de segmentation polygonaux", value=True)
-    enable_hud = st.toggle("Afficher la télémétrie incrustée (HUD)", value=True)
-    conf_thresh = st.slider("Seuil de confiance", 0.15, 0.60, 0.20, 0.05)
-
-with st.sidebar.expander("⚡ Consolidation des Vagues", expanded=False):
-    enable_consolidation = st.toggle("Fusionner les segments de même vague", value=True)
-    min_active_duration = st.slider("Durée min de glisse réelle (s)", 0.8, 3.5, 1.2, 0.2)
-    max_merge_gap = st.slider("Tolérance coupure spray / écume (s)", 1.0, 3.5, 2.0, 0.5)
-    speed_thresh = st.slider("Seuil vitesse take-off (px/f)", 2.0, 6.0, 3.5, 0.5)
-
-# Buttons for Configuration Persistence
-st.sidebar.markdown("---")
-col_save, col_reset = st.sidebar.columns(2)
-with col_save:
-    if st.button("💾 Sauvegarder", use_container_width=True, help="Enregistre ces réglages dans config.yaml comme valeurs par défaut."):
-        cfg_to_save = {
-            "profile_name": selected_preset if selected_preset != "Personnalisé / Actuel" else "Profil Utilisateur Personnalisé",
-            "surfer": {
-                "height_cm": float(surfer_height_cm),
-                "height_m": float(surfer_height_m),
-            },
-            "surfboard": {
-                "length_ft_in": board_choice,
-                "length_m": float(board_length_m),
-            },
-            "cameraman": {
-                "aspect_ratio": def_aspect,
-                "zoom_scale": float(zoom_scale),
-                "smoothing_factor": float(smoothing),
-                "lead_room_factor": float(lead_room),
-                "enable_split_screen": False,
-                "split_mode": def_split,
-            },
-            "detection": {
-                "model_name": model_name,
-                "conf_threshold": float(conf_thresh),
-                "enable_segmentation": enable_segmentation,
-                "enable_hud": enable_hud,
-            },
-            "pose_estimation": {
-                "enable": enable_pose,
-                "model_name": "yolov8n-pose.pt",
-            },
-            "state_machine": {
-                "min_ride_duration_sec": float(min_active_duration),
-                "speed_takeoff_thresh": float(speed_thresh),
-                "max_merge_gap_sec": float(max_merge_gap),
-                "consolidate_rides": enable_consolidation,
-            },
-            "wave_metrics": {
-                "enable": enable_wave_metrics,
-                "units": "dual_metric_imperial",
-            }
-        }
-        if save_config(cfg_to_save):
-            st.sidebar.success("Paramètres enregistrés par défaut !")
-
-with col_reset:
-    if st.button("🔄 Réinitialiser", use_container_width=True, help="Restaure les paramètres d'usine d'origine."):
-        save_config(DEFAULT_CONFIG)
-        st.sidebar.info("Paramètres par défaut restaurés. Rafraîchis la page.")
-
-
-# --- STEP 1: PARAMÈTRES RAPIDES EN 1 CLIC ---
-aspect_choice = st.radio(
-    "📱 Format Vidéo de Sortie",
-    ["9:16 (Instagram Reels / TikTok)", "16:9 (YouTube / Écran Large)"],
-    index=0 if def_aspect == "9:16" else 1,
-    horizontal=True,
-)
-aspect_option = "9:16" if "9:16" in aspect_choice else "16:9"
-
-# --- WORKSPACE DIRECTORIES ---
+# Zone principale : Dépôt vidéo & Démonstration
 data_dir = Path("data")
 data_dir.mkdir(parents=True, exist_ok=True)
 demo_video_path = data_dir / "sample_surf_session.mp4"
 
-# --- STEP 2: VIDEO SOURCE (DROPZONE ÉPURÉE SANS CHARGEMENT LOURD AUTOMATIQUE) ---
-st.markdown("#### 🌊 Déposer votre Vidéo de Surf")
+st.markdown("#### 🌊 Source Vidéo")
 col_upload, col_demo = st.columns([3, 1])
 
 with col_upload:
     uploaded_file = st.file_uploader(
-        "Déposer une vidéo de surf (MP4, MOV, AVI, MKV, WebM)",
-        type=["mp4", "mov", "avi", "mkv", "webm"],
-        label_visibility="collapsed"
+        "Déposer une vidéo de surf (MP4, MOV)",
+        type=["mp4", "mov"],
+        help="Glissez et déposez votre vidéo de surf pour lancer le traitement autonome.",
     )
 
 with col_demo:
+    st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
     use_demo = st.button("🌊 Charger la Démo (1080p)", use_container_width=True)
 
 video_target_path = None
@@ -352,89 +207,85 @@ if uploaded_file is not None:
     video_target_path = temp_path
     st.caption(f"Fichier actif : `{uploaded_file.name}`")
 elif use_demo:
-    download_or_generate_sample_video(demo_video_path)
+    if not demo_video_path.exists():
+        from surf_camera.utils import download_or_generate_sample_video
+        download_or_generate_sample_video(demo_video_path)
     video_target_path = demo_video_path
-    st.caption(f"Fichier actif : `{demo_video_path.name}` (Séquence réelle 1080p)")
+    st.caption(f"Fichier actif : `{demo_video_path.name}` (Séquence de référence)")
 
-if video_target_path:
+if video_target_path is not None:
     col_vid, col_action = st.columns([2, 1])
     with col_vid:
         st.video(str(video_target_path))
 
     with col_action:
-        st.markdown("#### ⚡ Analyse & Découpage")
-        st.caption(f"Configuration : Surfeur **{surfer_height_cm} cm** • Planche **{board_choice}** • Format **{aspect_option}**")
-        launch_btn = st.button("🚀 Lancer l'Analyse Instantanée", type="primary", use_container_width=True)
+        st.markdown("#### ⚡ Prêt pour le Cadrage")
+        st.caption(
+            f"Modèle : **{model_type}** • Format : **{aspect_ratio}** • "
+            f"Surfeur : **{surfer_height_m:.2f} m** • Min : **{min_ride_duration_sec:.1f} s**"
+        )
+        launch_btn = st.button("🏄 Lancer l'Auto-Cameraman", type="primary", use_container_width=True)
 
     if launch_btn:
         progress_bar = st.progress(0.0)
         status_text = st.empty()
 
-        # Get warm cached pipeline with pre-loaded models in Apple Silicon unified memory
-        pipeline = get_cached_pipeline(
-            model_name=model_name,
-            aspect_ratio=aspect_option,
-            surfer_height_m=surfer_height_m,
-            board_length_m=board_length_m,
-            enable_pose=enable_pose,
-            fast_scan=True,
-        )
-        # Apply runtime settings
-        pipeline.config.aspect_ratio = aspect_option
-        pipeline.config.save_split_screen = False
-        pipeline.config.zoom_scale = zoom_scale
-        pipeline.config.smoothing_factor = smoothing
-        pipeline.config.lead_room_factor = lead_room
-        pipeline.config.min_ride_duration_sec = min_active_duration
-        pipeline.config.speed_takeoff_thresh = speed_thresh
-        pipeline.config.render_hud = enable_hud
-        pipeline.config.render_segmentation = enable_segmentation
-        pipeline.config.consolidate_rides = enable_consolidation
-        pipeline.config.max_merge_gap_sec = max_merge_gap
-        pipeline.config.fast_scan = True
-
         def update_progress(ratio: float, msg: str):
             progress_bar.progress(ratio)
             status_text.caption(f"⚡ {msg}")
+
+        pipeline = get_cached_pipeline(
+            model_type=model_type,
+            aspect_ratio=aspect_ratio,
+            surfer_height_m=surfer_height_m,
+            min_ride_duration_sec=min_ride_duration_sec,
+        )
+        pipeline.config.aspect_ratio = aspect_ratio
+        pipeline.config.surfer_height_m = surfer_height_m
+        pipeline.config.min_ride_duration_sec = min_ride_duration_sec
 
         start_time = time.time()
         results = pipeline.process_video(
             video_path=str(video_target_path),
             output_dir="outputs",
             progress_callback=update_progress,
-            save_full_diagnostic=False,
+            save_full_diagnostic=True,
             save_ride_clips=True,
         )
         elapsed = time.time() - start_time
+
         st.session_state["results"] = results
         st.session_state["elapsed"] = elapsed
-        st.session_state["target_aspect"] = aspect_option
+        st.session_state["active_aspect"] = aspect_ratio
+
+        progress_bar.empty()
+        status_text.empty()
+        st.success(f"Analyse terminée en {elapsed:.1f}s ! {len(results['rides'])} vague(s) validée(s).")
 
 
-# --- STEP 3: RESULTS & CLIPS ---
+# Affichage des résultats
 if "results" in st.session_state:
     results = st.session_state["results"]
-    elapsed = st.session_state["elapsed"]
-    aspect_selected = st.session_state.get("target_aspect", "16:9")
-    rides = results["rides"]
+    rides = results.get("rides", [])
+    active_aspect = st.session_state.get("active_aspect", aspect_ratio)
 
-    st.markdown("---")
-    st.markdown("#### 3. Résultats de Session")
+    st.divider()
+    st.markdown("### 📊 Synthèse de la Session")
 
-    # Metrics row with emphasized KM/H and dual wave units
+    # Métriques globales
     m1, m2, m3, m4, m5, m6 = st.columns(6)
     with m1:
         st.metric("Vagues Validées", len(rides))
     with m2:
         max_speed = max([r.max_speed_kmh for r in rides], default=0.0)
-        st.metric("Vitesse Pic (Max)", f"{max_speed:.1f} km/h")
+        st.metric("Vitesse Pic Max", f"{max_speed:.1f} km/h")
     with m3:
         avg_speeds = [r.avg_speed_kmh for r in rides if r.avg_speed_kmh > 0]
         avg_speed = float(np.mean(avg_speeds)) if avg_speeds else 0.0
         st.metric("Vitesse Moyenne", f"{avg_speed:.1f} km/h")
     with m4:
         max_wave_h = max([r.wave_height_meters for r in rides], default=0.0)
-        st.metric("Vague Max", f"{max_wave_h:.2f} m", help=f"{max_wave_h*3.28084:.1f} ft")
+        st.metric("Vague Maximale", f"{max_wave_h:.2f} m", help=f"{meters_to_feet(max_wave_h):.1f} ft")
     with m5:
         total_dist = sum(r.distance_meters for r in rides)
         st.metric("Distance Totale", f"{total_dist:.0f} m")
@@ -442,86 +293,90 @@ if "results" in st.session_state:
         total_time = sum(r.duration_sec for r in rides)
         st.metric("Temps Cumulé", f"{total_time:.1f} s")
 
-    # Tabs for Outputs
-    tab_clips, tab_diag, tab_telemetry = st.tabs([
-        f"✂️ Clips Recadrés ({aspect_selected})",
-        "🌐 Vue Panoramique & Diagnostic",
-        "📈 Analyse Cinématique & Vagues"
-    ])
+    st.markdown("### 🎬 Clips Recadrés & Métriques Physiques")
+    if len(results.get("ride_clips", [])) == 0:
+        st.info(f"Aucune vague active d'au moins {min_ride_duration_sec:.1f}s n'a été détectée.")
+    else:
+        for idx, clip_path in enumerate(results["ride_clips"]):
+            ride = rides[idx]
+            wave_text = format_wave_dual_units(ride.wave_height_meters)
 
-    with tab_clips:
-        if len(results["ride_clips"]) == 0:
-            st.info("Aucune vague continue d'au moins " + str(min_active_duration) + "s n'a été détectée.")
+            st.markdown(f"#### 🏄 Vague #{ride.ride_id} — {ride.wave_behavior} ({ride.direction})")
+            col_clip, col_meta = st.columns([3, 2])
+            with col_clip:
+                st.video(clip_path)
+            with col_meta:
+                st.markdown(f"""
+                - **⚡ Vitesse Pic :** `{ride.max_speed_kmh:.1f} km/h`
+                - **🏄 Vitesse Moyenne :** `{ride.avg_speed_kmh:.1f} km/h`
+                - **🌊 Hauteur de Vague :** `{wave_text}`
+                - **🏷️ Catégorie :** `{ride.wave_category}`
+                - **🧭 Comportement :** `{ride.wave_behavior}`
+                - **⏱️ Durée réelle :** `{ride.duration_sec:.1f} s`
+                - **📏 Distance de glisse :** `{ride.distance_meters:.1f} m`
+                """)
+                with open(clip_path, "rb") as f:
+                    st.download_button(
+                        label=f"⬇️ Télécharger le Clip #{ride.ride_id} ({active_aspect})",
+                        data=f,
+                        file_name=Path(clip_path).name,
+                        mime="video/mp4",
+                        key=f"dl_clip_{ride.ride_id}",
+                        use_container_width=True,
+                    )
+
+    # Graphique de télémétrie de glisse
+    if len(rides) > 0:
+        st.markdown("### 📈 Télémétrie Cinématique de Glisse")
+        fps = results.get("fps", 30.0)
+        fig, (ax_spd, ax_wave) = plt.subplots(2, 1, figsize=(10, 6.2), facecolor="#090c10")
+        fig.subplots_adjust(hspace=0.38)
+
+        # Graphique 1 : Vitesse en km/h
+        ax_spd.set_facecolor("#0d1117")
+        for r in rides:
+            if r.speed_series_kmh:
+                t_axis = np.arange(len(r.speed_series_kmh)) / fps
+                ax_spd.plot(
+                    t_axis,
+                    r.speed_series_kmh,
+                    label=f"Vague #{r.ride_id} ({r.direction} • Pic: {r.max_speed_kmh:.1f} km/h)",
+                    lw=2.2,
+                )
+        ax_spd.set_title("Profil de Vitesse du Surfeur (km/h)", fontsize=11, fontweight="600", color="#ffffff")
+        ax_spd.set_xlabel("Temps de glisse (secondes)", color="#8b949e", fontsize=9)
+        ax_spd.set_ylabel("Vitesse (km/h)", color="#8b949e", fontsize=9)
+        ax_spd.tick_params(colors="#8b949e")
+        for spine in ax_spd.spines.values():
+            spine.set_color("#21262d")
+        ax_spd.grid(True, alpha=0.15, color="#8b949e")
+        ax_spd.legend(facecolor="#161b22", edgecolor="#30363d", labelcolor="#ffffff", loc="upper left")
+
+        # Graphique 2 : Hauteur de vague
+        ax_wave.set_facecolor("#0d1117")
+        for r in rides:
+            series = getattr(r, "wave_height_series_m", [])
+            if series:
+                t_axis = np.arange(len(series)) / fps
+                w_lbl = f"Vague #{r.ride_id} ({r.wave_height_meters:.2f} m / {r.wave_height_feet:.1f} ft • {r.wave_category})"
+                ax_wave.plot(t_axis, series, label=w_lbl, color="#00e5ff", lw=2.0)
+        ax_wave.set_title("Hauteur de Face de Vague (mètres)", fontsize=11, fontweight="600", color="#ffffff")
+        ax_wave.set_xlabel("Temps de glisse (secondes)", color="#8b949e", fontsize=9)
+        ax_wave.set_ylabel("Hauteur (m)", color="#8b949e", fontsize=9)
+        ax_wave.tick_params(colors="#8b949e")
+        for spine in ax_wave.spines.values():
+            spine.set_color("#21262d")
+        ax_wave.grid(True, alpha=0.15, color="#8b949e")
+        ax_wave.legend(facecolor="#161b22", edgecolor="#30363d", labelcolor="#ffffff", loc="upper left")
+
+        st.pyplot(fig)
+        plt.close(fig)
+
+    # Vue panoramique de contrôle (overview large avec boîte de cadrage PTZ) dans un expander pliable
+    with st.expander("🌐 Vue panoramique de contrôle (Overview PTZ)", expanded=False):
+        diag_path = results.get("diagnostic_video")
+        if diag_path and Path(diag_path).exists():
+            st.caption("Plan large original annoté montrant la boîte de cadrage PTZ dynamique, le suivi et la segmentation de la vague.")
+            st.video(diag_path)
         else:
-            for idx, clip_path in enumerate(results["ride_clips"]):
-                ride = rides[idx]
-                wave_str = format_wave_dual_units(ride.wave_height_meters)
-                st.markdown(f"##### Vague #{ride.ride_id} — Vitesse Pic : `{ride.max_speed_kmh:.1f} km/h` • Vague : `{wave_str}` ({ride.direction})")
-                c_vid, c_info = st.columns([2, 1])
-                with c_vid:
-                    st.video(clip_path)
-                with c_info:
-                    st.markdown(f"""
-                    - **⚡ Vitesse Max (Pic) :** `{ride.max_speed_kmh:.1f} km/h`
-                    - **🏄 Vitesse Moyenne :** `{ride.avg_speed_kmh:.1f} km/h`
-                    - **🌊 Hauteur de Vague :** `{wave_str}`
-                    - **🏷️ Catégorie :** `{ride.wave_category}`
-                    - **📏 Distance de glisse :** `{ride.distance_meters:.1f} m`
-                    - **🧭 Orientation :** `{ride.direction}`
-                    - **⏱️ Durée réelle :** `{ride.duration_sec:.1f} s`
-                    """)
-                    with open(clip_path, "rb") as f:
-                        st.download_button(
-                            label=f"⬇️ Télécharger le Clip #{ride.ride_id} ({aspect_selected})",
-                            data=f,
-                            file_name=Path(clip_path).name,
-                            mime="video/mp4",
-                            key=f"dl_{ride.ride_id}",
-                            use_container_width=True,
-                        )
-
-    with tab_diag:
-        if results["diagnostic_video"] and Path(results["diagnostic_video"]).exists():
-            st.caption("Flux complet avec masques de segmentation, masse d'eau polygonale et fenêtre de cadrage PTZ.")
-            st.video(results["diagnostic_video"])
-
-    with tab_telemetry:
-        if len(rides) > 0:
-            fig, (ax_spd, ax_wave) = plt.subplots(2, 1, figsize=(10, 6.2), facecolor="#090c10")
-            fig.subplots_adjust(hspace=0.38)
-
-            fps = results.get("fps", 30.0)
-
-            # Subplot 1: Speed in km/h
-            ax_spd.set_facecolor("#0d1117")
-            for r in rides:
-                if r.speed_series_kmh:
-                    time_axis = np.arange(len(r.speed_series_kmh)) / fps
-                    ax_spd.plot(time_axis, r.speed_series_kmh, label=f"Vague #{r.ride_id} ({r.direction} • Pic: {r.max_speed_kmh:.1f} km/h)", lw=2.2)
-            ax_spd.set_title("Profil de Vitesse du Surfeur (km/h)", fontsize=11, fontweight="600", color="#ffffff")
-            ax_spd.set_xlabel("Temps de glisse (secondes)", color="#8b949e", fontsize=9)
-            ax_spd.set_ylabel("Vitesse (km/h)", color="#8b949e", fontsize=9)
-            ax_spd.tick_params(colors="#8b949e")
-            for spine in ax_spd.spines.values():
-                spine.set_color("#21262d")
-            ax_spd.grid(True, alpha=0.15, color="#8b949e")
-            ax_spd.legend(facecolor="#161b22", edgecolor="#30363d", labelcolor="#ffffff", loc="upper left")
-
-            # Subplot 2: Wave Height in meters & feet
-            ax_wave.set_facecolor("#0d1117")
-            for r in rides:
-                if r.wave_height_series_m:
-                    time_axis = np.arange(len(r.wave_height_series_m)) / fps
-                    w_label = f"Vague #{r.ride_id} ({r.wave_height_meters:.2f}m / {r.wave_height_feet:.1f}ft • {r.wave_category})"
-                    ax_wave.plot(time_axis, r.wave_height_series_m, label=w_label, color="#00e5ff", lw=2.0)
-            ax_wave.set_title("Hauteur de Face de Vague (mètres / feet)", fontsize=11, fontweight="600", color="#ffffff")
-            ax_wave.set_xlabel("Temps de glisse (secondes)", color="#8b949e", fontsize=9)
-            ax_wave.set_ylabel("Hauteur (mètres)", color="#8b949e", fontsize=9)
-            ax_wave.tick_params(colors="#8b949e")
-            for spine in ax_wave.spines.values():
-                spine.set_color("#21262d")
-            ax_wave.grid(True, alpha=0.15, color="#8b949e")
-            ax_wave.legend(facecolor="#161b22", edgecolor="#30363d", labelcolor="#ffffff", loc="upper left")
-
-            st.pyplot(fig)
-            plt.close()
+            st.info("Aucune vidéo panoramique de contrôle disponible pour cette session.")

@@ -142,6 +142,14 @@ class SurfTrackingPipeline:
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
+        self.tracker = SurferTracker(
+            max_tube_lost_frames=int(self.config.tube_max_memory_sec * fps),
+        )
+        self.scale_estimator = MetricScaleEstimator(
+            nominal_surfer_height_m=self.config.surfer_height_m,
+            nominal_board_length_m=self.config.board_length_m,
+        )
+        self.wave_engine = WaveSegmentationEngine()
         self.state_machine = SurferStateMachine(
             fps=fps,
             min_ride_duration_sec=self.config.min_ride_duration_sec,

@@ -34,14 +34,14 @@ def main():
     parser.add_argument("--zoom-scale", type=float, default=cfg["cameraman"]["zoom_scale"], help="Facteur de zoom virtuel")
     parser.add_argument("--smoothing", type=float, default=cfg["cameraman"]["smoothing_factor"], help="Amortissement cinématique EMA")
     parser.add_argument("--lead-room", type=float, default=cfg["cameraman"]["lead_room_factor"], help="Anticipation règle des tiers")
-    parser.add_argument("--min-duration", type=float, default=cfg["state_machine"]["min_ride_duration_sec"], help="Durée min pour valider un ride (s)")
-    parser.add_argument("--model", type=str, default=cfg["detection"]["model_name"], help="Poids YOLO (yolov8n-seg.pt, yolov8n.pt)")
+    parser.add_argument("--min-duration", "-d", type=float, default=cfg["state_machine"]["min_ride_duration_sec"], help="Durée min pour valider un ride (s)")
+    parser.add_argument("--model", "-m", type=str, default=cfg["detection"]["model_name"], help="Poids YOLO (surf_v2, coco, yolov8n.pt)")
 
     # Units: favored cm for surfer, ft/in for board
     parser.add_argument("--surfer-height-cm", type=float, default=cfg["surfer"]["height_cm"],
                         help="Taille du surfeur en centimètres (ex: 185)")
-    parser.add_argument("--surfer-height", type=float, default=None,
-                        help="Taille du surfeur en mètres (ex: 1.85)")
+    parser.add_argument("--surfer-height", "-s", type=float, default=None,
+                        help="Taille du surfeur en mètres (ex: 1.75)")
     parser.add_argument("--board-length-ft-in", type=str, default=cfg["surfboard"]["length_ft_in"],
                         help="Longueur de planche en pieds et pouces (ex: 5'8\")")
     parser.add_argument("--board-length", type=float, default=None,
