@@ -4,34 +4,88 @@
 > Transformation automatique de plans larges de surf en clips cinématiques verticaux (9:16) ou paysages (16:9), détection intelligente de take-off, mémoire d'inertie de tube et qualification du déferlement.
 
 <div align="center">
-  <img src="./assets/surf_vision_ai_real_demo.gif" width="360" alt="Démonstration réelle de cadrage automatique">
-  <p><em>Session réelle à Huntington Beach : cadrage virtuel PTZ fluide, tracking flottaison, étalonnage morphologique et badge télémétrique discret.</em></p>
+  <h3>🎯 Détection &amp; Segmentation d'Instance en Milieu Réel (iPhone 9:16)</h3>
+  <img src="./assets/surf_vision_ai_real_demo.gif" width="360" alt="Détection IA et Segmentation de Surf sur Vidéo Réelle">
+  <p><em>Session réelle à Huntington Beach, CA (c'est moi qui surfe 😎) :<br>
+  Prouesse technique de détection temps réel (80 à 100 FPS), isolation robuste du surfeur et de la planche au cœur des gerbes d'écume, et élimination complète des faux positifs marins.</em></p>
 </div>
 
 ***
 
-## 1. Vision et Fonctionnalités Clés
+## 🌊 La Problématique du Surfeur
 
-Le projet **Surf-Camera-Vision** offre aux surfeurs, coachs et vidéastes un studio autonome de production vidéo à haute cadence (80 à 100 FPS sur Apple Silicon M4).
+Se filmer seul depuis la plage pour analyser sa technique ou partager ses vagues sur les réseaux est un défi majeur :
+- **Un trépied fixe en plan large (4K / grand angle)** donne une vidéo décevante où le surfeur n'est qu'un minuscule point lointain perdu au milieu de l'océan.
+- **Les trépieds motorisés avec balise GPS (Soloshot, Pivo)** coûtent cher, s'enrayent avec le sable salin, subissent des temps de latence mécanique et nécessitent le port d'un boîtier étanche encombrant.
+- **Déléguer la caméra à un proche** sur la plage est contraignant lors de sessions de plusieurs heures.
 
-### Fonctionnalités Majeures
-- **Auto-Cameraman Virtuel (Digital PTZ)** : Recadre dynamiquement les plans larges fixes au format vertical mobile **9:16** (Reels / TikTok) ou cinématique **16:9**, avec amorti de rotule fluide (EMA) et anticipation d'ouverture de vague (*lead room*).
-- **Suivi Robuste sur Ligne de Flottaison** : Suivi spatio-temporel ByteTracker calculé sur la base inférieure de la boîte (`bbox[3]`), évitant tout saut artificiel de vitesse lors du pop-up.
-- **Gestion Avancée du Tube & Occlusion (Inertie 2.5s)** : Maintien de l'identité du surfeur jusqu'à 75 frames (2.5 secondes) lorsqu'il disparaît sous la lèvre, permettant de rattraper la sortie du tube (*spit*) sans couper le clip.
-- **Zoom-Out de Sécurité PTZ** : Élargissement progressif du cadre de 25% à 35% vers l'avant de la vague dès que le surfeur entre dans la section creuse, englobant toute la manœuvre.
-- **Qualification Morphologique du Déferlement** : Détermination déterministe du comportement de la vague : **Droite qui ouvre**, **Gauche qui ouvre**, ou **Fermeture (Close-out)**.
-- **Métriques Physiques Réelles et Incontestables** :
-  * Vitesse de glisse réelle (vitesse pic au 95e percentile et vitesse moyenne en km/h).
-  * Hauteur de face de vague en double unité (mètres et pieds) avec classification internationale (*Waist*, *Chest*, *Head High*).
-  * Durée effective du ride (secondes) et distance totale surfée (mètres).
-- **Double Moteur Détecteur au Choix** : Bascule instantanée entre le modèle dédié fine-tuné en milieu marin (`yolov8n_surf_v2_best.pt`, 6.2 MB) et le modèle officiel standard COCO (`yolov8n.pt`, 6.5 MB).
-- **Badge Télémétrique Flottant Épuré** : Incrustation minimaliste et élégante en bas de chaque clip exporté, prêt pour le partage.
+**Surf-Camera-Vision résout ce problème par vision par ordinateur pure (Computer Vision) :**  
+Posez simplement votre smartphone ou caméra sur un trépied en bord de plage. L'algorithme détecte vos take-offs, vous suit avec un **cadrage dynamique fluide (règle des tiers et anticipation de l'ouverture)**, et exporte automatiquement chaque vague en clip prêt pour Instagram Reels / TikTok (9:16) ou YouTube (16:9).
+
+<div align="center">
+  <img src="./assets/virtual_cameraman_ptz_demo.gif" width="680" alt="Démonstration du Cameraman Virtuel PTZ">
+  <p><em>Démonstration du cadrage dynamique PTZ : passage fluide du plan large fixe (gauche) au recadrage vertical cinématique (droite) avec anticipation d'ouverture (lead-room) et amorti de rotule.</em></p>
+</div>
 
 ***
 
-## 2. Architecture du Codebase
+## ⚡ Démarrage Rapide en 1 Clic (macOS &amp; Web)
 
-Le dossier central `surf_camera/` est organisé de façon modulaire et linéaire :
+Le projet est conçu pour une prise en main instantanée sans ligne de commande complexe.
+
+### 1. Lancement en 1 Clic sur macOS (Recommandé)
+Double-cliquez directement sur le fichier **`launch_app.command`** dans le dossier du projet via le Finder.  
+Le script se charge automatiquement de :
+1. Détecter l'interpréteur Python et charger l'environnement virtuel.
+2. Vérifier les dépendances nécessaires.
+3. Lancer le serveur Streamlit local et ouvrir l'application dans votre navigateur par défaut (Safari ou Chrome) sur `http://localhost:8501`.
+
+### 2. Interface Web Streamlit Studio
+Une fois l'application ouverte :
+- **Glissez-déposez votre vidéo** (MP4 ou MOV, filmée depuis la plage ou sur l'eau).
+- **Choisissez votre format** : `9:16` (Vertical pour Reels/TikTok/Shorts) ou `16:9` (Cinématique pour grand écran).
+- **Sélectionnez le modèle IA** :
+  * `surf_v2` (Recommandé) : Modèle YOLOv8 fine-tuné spécifiquement en milieu marin (6.2 Mo).
+  * `coco` : Modèle YOLO standard pré-entraîné (6.5 Mo).
+- **Indiquez votre taille** (par défaut 1.75 m) pour étalonner la conversion métrique pixels-mètres.
+- Cliquez sur **Lancer l'analyse &amp; le découpage**.
+- Visualisez directement votre clip dans le lecteur intégré avec son badge télémétrique et téléchargez-le en un clic.
+
+***
+
+## 🚀 Innovations Techniques &amp; Algorithmes Clés
+
+### 1. Suivi sur la Ligne de Flottaison (Suppression du Biais Pop-Up)
+Les trackers traditionnels suivent le centre géométrique de la boîte englobante. Lors du passage de la rame allongée à la posture debout (pop-up), le centre de la boîte monte brusquement de plusieurs dizaines de pixels, créant un pic de vitesse vertical fictif.  
+Surf-Camera-Vision calcule son déplacement cinématique strictement sur la coordonnée inférieure `bbox[3]` (contact planche-eau). La vitesse mesurée (en km/h) reflète ainsi fidèlement la vitesse réelle de glisse horizontale sur la vague.
+
+### 2. Mémoire d'Inertie de Tube (Persistance 2.5s)
+Lorsqu'un surfeur s'engage dans le tube, la lèvre et le rideau d'eau le masquent totalement. Un tracker ordinaire abandonne la piste et recrée une détection distincte à la sortie.  
+Notre moteur surveille l'état de glisse (`RIDING`) : si le surfeur disparaît dans la section creuse, l'algorithme extrapole sa trajectoire selon son inertie cinématique pendant **75 frames (2.5 secondes à 30 fps)**. Dès la sortie du rouleau (*spit*), le surfeur est réassocié au même identifiant sans coupure.
+
+### 3. Zoom-Out de Sécurité PTZ
+Pendant l'occlusion en tube, le cameraman virtuel ne fige pas l'image :
+- Il continue de glisser vers l'avant dans le sens du déferlement.
+- Il élargit la fenêtre de recadrage de **25% à 35%** (*safety zoom-out*).
+- Cet élargissement capture le souffle de sortie et la lèvre en action, offrant une composition spectaculaire avant de se recentrer en douceur dès la réapparition du surfeur.
+
+### 4. Qualification Morphologique du Déferlement
+L'analyseur de masse d'eau inspecte la continuité de la face de vague :
+- **Droite qui ouvre** : La vague déroule vers la droite du surfeur avec une épaule exploitable.
+- **Gauche qui ouvre** : La vague déroule vers la gauche du surfeur.
+- **Fermeture (Close-out)** : Les deux sections s'effondrent d'un seul bloc simultanément.
+
+### 5. Badge Télémétrique Flottant Épuré
+Chaque clip exporté intègre un badge semi-transparent discret en bas de l'écran affichant :
+- La direction du déferlement (`DROITE`, `GAUCHE`).
+- La vitesse de pointe réelle au 95e percentile (en km/h).
+- La taille de face de vague (en mètres et pieds, avec qualification internationale *Waist*, *Chest*, *Head High*).
+
+***
+
+## 📐 Architecture du Codebase
+
+L'ensemble du moteur réside dans le package modulaire `surf_camera/` :
 
 <table>
   <thead>
@@ -47,27 +101,27 @@ Le dossier central `surf_camera/` est organisé de façon modulaire et linéaire
     </tr>
     <tr>
       <td><code>surf_camera/config.py</code></td>
-      <td>Dataclass de configuration <code>SurfConfig</code>, résolveur de chemins de modèles et convertisseurs d'unités (m, cm, ft, in, km/h).</td>
+      <td>Dataclass <code>SurfConfig</code>, résolveur de chemins de modèles et convertisseurs d'unités (m, cm, ft, in, km/h).</td>
     </tr>
     <tr>
       <td><code>surf_camera/detector.py</code></td>
-      <td>Détecteur YOLO multi-modèle (<code>SurferDetector</code>) assurant la bascule transparente entre <code>surf_v2</code> (dédié marin) et <code>coco</code> (standard).</td>
+      <td>Détecteur YOLO multi-modèle (<code>SurferDetector</code>) assurant la bascule transparente entre <code>surf_v2</code> et <code>coco</code>.</td>
     </tr>
     <tr>
       <td><code>surf_camera/tracker.py</code></td>
-      <td>Suivi spatio-temporel (<code>SurferTracker</code>) avec association IoU/distance, cinématique sur la ligne de flottaison et mémoire d'occlusion étendue en tube (2.5s).</td>
+      <td>Suivi cinématique (<code>SurferTracker</code>) sur la ligne de flottaison avec mémoire d'occlusion étendue en tube (2.5s).</td>
     </tr>
     <tr>
       <td><code>surf_camera/state_machine.py</code></td>
-      <td>Machine à états finis (<code>SurferStateMachine</code> : Paddling, Take-Off, Riding, Exit) et consolidation des segments de même vague dans <code>RideEvent</code>.</td>
+      <td>Machine à états finis (<code>SurferStateMachine</code> : Paddling, Take-Off, Riding, Exit) et consolidation des vagues dans <code>RideEvent</code>.</td>
     </tr>
     <tr>
       <td><code>surf_camera/cameraman.py</code></td>
-      <td>Cadrage virtuel PTZ (<code>VirtualCameraman</code> et <code>CameraBox</code>) avec lead-room directionnel, lissage exponentiel, bornage strict et zoom-out de sécurité en tube.</td>
+      <td>Cadrage virtuel PTZ (<code>VirtualCameraman</code>) avec lead-room directionnel, amorti cinématique et zoom-out de sécurité en tube.</td>
     </tr>
     <tr>
       <td><code>surf_camera/wave_analyzer.py</code></td>
-      <td>Analyseur de vague (<code>WaveSegmentationEngine</code>) : segmentation de la masse d'eau, calcul de hauteur de face et qualification Droite / Gauche / Close-out.</td>
+      <td>Analyseur de vague (<code>WaveSegmentationEngine</code>) : calcul de hauteur de face et qualification Droite / Gauche / Close-out.</td>
     </tr>
     <tr>
       <td><code>surf_camera/scale_estimator.py</code></td>
@@ -75,11 +129,11 @@ Le dossier central `surf_camera/` est organisé de façon modulaire et linéaire
     </tr>
     <tr>
       <td><code>surf_camera/pipeline.py</code></td>
-      <td>Orchestrateur linéaire mono-passe (<code>SurfTrackingPipeline</code>) reliant la lecture vidéo, l'inférence, le cadrage PTZ et l'exportation des clips MP4.</td>
+      <td>Orchestrateur linéaire mono-passe (<code>SurfTrackingPipeline</code>) reliant lecture, inférence, recadrage PTZ et export MP4.</td>
     </tr>
     <tr>
       <td><code>surf_camera/utils.py</code></td>
-      <td>Fonctions de rendu graphique (badge flottant minimaliste, incrustation diagnostic, encodage H.264 et générateur de vidéo synthétique).</td>
+      <td>Badge télémétrique minimaliste, incrustation diagnostic, encodage H.264 et utilitaires graphiques.</td>
     </tr>
     <tr>
       <td><code>surf_camera/pose_estimator.py</code></td>
@@ -90,64 +144,9 @@ Le dossier central `surf_camera/` est organisé de façon modulaire et linéaire
 
 ***
 
-## 3. Explication Pédagogique des Algorithmes
+## ⚡ Performances &amp; Benchmarks
 
-### 3.1 ByteTracker sur Ligne de Flottaison (Suppression du Biais Pop-Up)
-Dans les systèmes de vision classiques, le suivi de la vitesse s'effectue sur le centre géométrique de la boîte englobante. Or, lorsque le surfeur se redresse de la planche en phase de take-off, son centre monte de 40 à 60 pixels en une fraction de seconde, ce qui injecte un pic de vitesse vertical fictif.
-
-Surf-Camera-Vision résout ce problème en calculant le déplacement cinématique sur la coordonnée inférieure `bbox[3]` (la ligne de flottaison). Le bas de la boîte reste constamment en contact avec la planche et la surface de l'eau, fournissant une vitesse horizontale réelle et stable.
-
-### 3.2 Mémoire d'Inertie de Tube (Persistance 2.5s)
-Lorsqu'un surfeur pénètre dans un tube profond, la lèvre d'eau et les projections d'écume masquent entièrement sa silhouette. Un tracker standard abandonne le surfeur au bout de quelques frames et crée une nouvelle détection lors de sa sortie, brisant la vague en deux clips distincts.
-
-La mémoire d'inertie de tube surveille l'état `RIDING` : si le surfeur disparaît alors qu'il est en vitesse sur une vague qui creuse, le tracker maintient son identifiant et extrapole sa trajectoire selon son dernier vecteur cinématique pendant 75 frames (2.5 secondes à 30 fps). Dès que le surfeur est expulsé du tube (*spit*), il est automatiquement rattaché au même ride.
-
-### 3.3 Zoom-Out de Sécurité PTZ du Cameraman
-Pour capturer l'action sans coupure lors d'une disparition sous la lèvre :
-1. La caméra virtuelle continue son déplacement dans la direction de glisse du surfeur.
-2. La fenêtre de cadrage s'élargit progressivement de 25% à 35% (*zoom-out de sécurité*).
-3. Cet élargissement englobe la poche du tube et la zone de sortie, offrant une composition cinématographique spectaculaire.
-4. Dès la réapparition du surfeur, le cadre se recentre en douceur avec un amorti exponentiel (EMA).
-
-### 3.4 Qualification Morphologique du Déferlement
-L'analyseur de vague explore la face d'eau ascendante adjacente au surfeur :
-- **Droite qui ouvre** : La crête de vague déroule vers la droite du surfeur avec une section surfable continue.
-- **Gauche qui ouvre** : La crête déroule vers la gauche du surfeur.
-- **Fermeture (Close-out)** : Les deux sections latérales s'effondrent simultanément d'un seul bloc, fermant toute ligne d'échappée.
-
-***
-
-## 4. Démarrage Rapide
-
-### 4.1 Lancement en 1 Clic sur macOS (Recommandé)
-Double-cliquez directement sur **`launch_app.command`** dans le Finder.  
-Le script détecte votre environnement Python, vérifie les dépendances et ouvre automatiquement l'application dans votre navigateur par défaut (Safari ou Chrome) sur `http://localhost:8501`.
-
-### 4.2 Lancement en Ligne de Commande (macOS / Linux)
-Exécutez le script de démarrage dans votre terminal :
-```bash
-./start.sh
-```
-
-### 4.3 Mode CLI (Sans Interface Web)
-Pour traiter des vidéos de surf par lot ou automatiser un workflow :
-```bash
-python3 track_surf.py -i data/sample_surf_session.mp4 -a 9:16 -m surf_v2 -s 1.75 -d 1.5
-```
-
-Options disponibles pour `track_surf.py` :
-- `-i <fichier>` : Chemin vers la vidéo d'entrée (MP4 ou MOV).
-- `-a <format>` : Format de recadrage virtuel (`9:16` pour mobile ou `16:9` cinématique).
-- `-m <modele>` : Modèle YOLO (`surf_v2` pour le modèle dédié ou `coco` pour le standard).
-- `-s <taille>` : Taille du surfeur en mètres (par défaut `1.75`).
-- `-d <duree>` : Durée minimale en secondes pour valider une vague (par défaut `1.5`).
-- `-o <dossier>` : Répertoire d'exportation des clips (par défaut `outputs`).
-
-***
-
-## 5. Performances & Benchmarks
-
-Mesures relevées sur puce Apple Silicon M4 (GPU Metal Performance Shaders - MPS) sur des séquences vidéo réelles 1080p à 30 FPS :
+Relevés de performances mesurés sur puce Apple Silicon M4 (GPU Metal Performance Shaders - MPS) sur des séquences vidéo réelles 1080p à 30 FPS :
 
 <table>
   <thead>
@@ -179,7 +178,7 @@ Mesures relevées sur puce Apple Silicon M4 (GPU Metal Performance Shaders - MPS
       <td>~550 FPS</td>
     </tr>
     <tr>
-      <td>Encodage Matériel Clips MP4 (avc1 / H.264)</td>
+      <td>Encodage Vidéo MP4 (avc1 / H.264)</td>
       <td>1.4 ms</td>
       <td>~700 FPS</td>
     </tr>
@@ -191,17 +190,40 @@ Mesures relevées sur puce Apple Silicon M4 (GPU Metal Performance Shaders - MPS
   </tbody>
 </table>
 
-Une vidéo de session de 30 secondes (900 frames 1080p) est intégralement analysée, découpée et exportée en moins de 10 secondes réelles.
+Une séquence vidéo de session de 30 secondes (900 frames 1080p) est intégralement analysée, recadrée et exportée en moins de 10 secondes réelles.
 
 ***
 
-## 6. Tests et Barrière de Validation
+## 💻 Mode Ligne de Commande (CLI)
 
-Le projet intègre une suite de 35 tests automatisés couvrant l'ensemble des modules (détection, tracker, cameraman PTZ, machine à états, déferlement et pipeline).
+Pour automatiser des traitements par lots ou intégrer le pipeline dans un script externe :
+```bash
+python3 track_surf.py -i data/sample_surf_session.mp4 -a 9:16 -m surf_v2 -s 1.75 -d 1.5
+```
 
-Pour exécuter la suite de tests :
+Paramètres disponibles :
+- `-i <fichier>` : Chemin vers la vidéo source (MP4 ou MOV).
+- `-a <format>` : Ratio de recadrage virtuel (`9:16` pour smartphone ou `16:9` paysage).
+- `-m <modele>` : Modèle YOLO (`surf_v2` pour le modèle marin optimisé, `coco` pour le standard).
+- `-s <taille>` : Taille du surfeur en mètres (par défaut `1.75`).
+- `-d <duree>` : Durée minimale en secondes pour sauvegarder une vague (par défaut `1.5`).
+- `-o <dossier>` : Dossier de sortie des clips MP4 découpés (par défaut `outputs`).
+
+***
+
+## 🧪 Barrière de Tests &amp; Validation
+
+La fiabilité de l'application est garantie par une suite de **39 tests automatisés** couvrant l'intégralité du pipeline :
 ```bash
 pytest -v
 ```
+Tous les tests s'exécutent en moins de 4 secondes et valident la non-régression, les calculs physiques et les règles de typographie.
 
-Tous les tests s'exécutent en moins de 4 secondes et garantissent 100% de fiabilité.
+***
+
+## 🔮 Roadmap &amp; Recherche (Phase 2)
+
+Les axes de recherche explorés pour les prochaines versions comprennent :
+- **Coaching Visuel par LLM Multimodal** : Analyse rétrospective de la vidéo par un modèle de vision pour générer des conseils biomécaniques personnalisés (placement des épaules, flexion des genoux, trajectoire sur la face de vague).
+- **Évaluation par Apprentissage sur Compétitions WSL** : Entraînement de modèles de scoring calibrés sur les notations officielles des juges de la World Surf League pour attribuer des notes objectives sur 10.
+- **Détection Dédiée des Vagues Tubulaires** : Classification automatique des sections à rouleau creux afin d'isoler spécifiquement les séquences de tube les plus engagées.
